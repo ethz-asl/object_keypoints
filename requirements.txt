@@ -1,5 +1,6 @@
 h5py==3.1.0
 scikit-video==1.1.11
 hud==0.1
+opencv==4.2.0
 
 
