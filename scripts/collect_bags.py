@@ -11,9 +11,6 @@ TOPICS_TO_RECORD = [
     '/zedm/zed_node/left_raw/image_raw_color',
     '/zedm/zed_node/right_raw/camera_info',
     '/zedm/zed_node/right_raw/image_raw_color',
-    '/zedm/zed_node/depth/camera_info',
-    '/zedm/zed_node/depth/depth_registered',
-    '/zedm/zed_node/imu/data',
     '/joint_states'
 ]
 
@@ -75,7 +72,7 @@ class Program:
         self.status_line = RECORDING
         self._refresh_screen()
         try:
-            process = subprocess.run(['rosbag', 'record', '--tcpnodelay', '--buffsize=0', '--chunksize=4096', '--output-name', filepath, '--duration', '20'] + TOPICS_TO_RECORD,
+            process = subprocess.run(['rosbag', 'record', '--buffsize=0', '--chunksize=524288', '--output-name', filepath, '--duration', '20'] + TOPICS_TO_RECORD,
                     stdout=subprocess.PIPE, check=True)
         except subprocess.CalledProcessError as e:
             print(e)

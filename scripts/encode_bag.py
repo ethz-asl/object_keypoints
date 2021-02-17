@@ -34,7 +34,7 @@ def handeye_calibration():
     message.child_frame_id = "zedm_left_camera_optical_frame"
     return message
 
-T_HL = ros_utils.transform_message_to_matrix(handeye_calibration())
+T_HL = ros_utils.message_to_transform(handeye_calibration())
 
 bridge = CvBridge()
 
@@ -72,33 +72,16 @@ class Runner:
         self._bags.sort()
 
     def _read_poses(self, out_folder, bag):
-        robot_tf_tree = tf2.BufferCore(rospy.Duration(36000.0))
-        camera_tf_tree = tf2.BufferCore(rospy.Duration(36000.0))
-        start_time = rospy.Time(time())
-        calibration_message = handeye_calibration()
+        print("Reading poses")
+        tf_tree = tf2.BufferCore(rospy.Duration(360000.0))
         for topic, message, t in bag.read_messages(topics=["/tf", "/tf_static"]):
             for tf_message in message.transforms:
-                start_time = min(t, tf_message.header.stamp)
-                # The base_link to zedm_camera_center transform is wrong. We have the hand-eye calibration
-                # which is a transform from panda_link7 to zedm_left_camera_optical_frame. We could just add that to the
-                # transform tree, but this would actually make the tree a graph. We could run a preprocessing
-                # step where we convert the graph to a tree by inverting the appropriate transforms.
-                # However, in the interest of time, we deal with this by creating two separate trees, one for
-                # the camera and another for the robot. We then manually handle the transforms where needed to
-                # get the correct camera optical frame positions for each frame.
-                if tf_message.child_frame_id == 'zedm_camera_center' and tf_message.header.frame_id == "base_link":
-                    continue
-                elif 'zedm' in tf_message.child_frame_id:
-                    tree = camera_tf_tree
-                else:
-                    tree = robot_tf_tree
-
                 if topic == '/tf_static':
-                    tree.set_transform_static(tf_message, f"bag/{topic}")
+                    tf_tree.set_transform_static(tf_message, f"bag/{topic}")
                 else:
-                    tree.set_transform(tf_message, f'bag/{topic}')
+                    tf_tree.set_transform(tf_message, f'bag/{topic}')
 
-        return robot_tf_tree, camera_tf_tree
+        return tf_tree
 
     def _gather_images(self, bag):
         left_messages = []
@@ -119,15 +102,15 @@ class Runner:
         print(f"left images: {len(left_messages)} right images: {len(right_messages)}")
         return left_messages, right_messages
 
-    def _gather_poses(self, robot_tree, camera_tree, left, right):
+    def _gather_poses(self, tf_tree, left, right):
+        print("Looking up poses")
         left_data = []
         i = 0
         for item in left:
             try:
-                T_BH = robot_tree.lookup_transform_core(target_frame='panda_link7',
-                        source_frame='base_link', time=item['message'].header.stamp)
-                T_BH = ros_utils.transform_message_to_matrix(T_BH)
-                T_BL = T_BH @ T_HL
+                # Reminder: ^{B}T^{A} = T_BA = lookup_transform(source_frame=A, target_frame=B)
+                T_BL = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='base_link',
+                        source_frame='zedm_left_optical_frame', time=item['message'].header.stamp))
                 item['camera_pose'] = T_BL
                 item['i'] = i # Override index as some frames might have been skipped.
                 left_data.append(item)
@@ -139,11 +122,8 @@ class Runner:
         i = 0
         for item in right:
             try:
-                T_BH = ros_utils.transform_message_to_matrix(robot_tree.lookup_transform_core(target_frame='panda_link7',
-                        source_frame='base_link', time=item['message'].header.stamp))
-                T_LR = ros_utils.transform_message_to_matrix(camera_tree.lookup_transform_core(target_frame="zedm_right_camera_optical_frame",
-                        source_frame="zedm_left_camera_optical_frame", time=item['message'].header.stamp))
-                T_BR = T_BH @ T_HL @ T_LR
+                T_BR = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='base_link',
+                        source_frame='zedm_right_optical_frame', time=item['message'].header.stamp))
                 item['camera_pose'] = T_BR
                 item['i'] = i
                 right_data.append(item)
@@ -213,10 +193,10 @@ class Runner:
                 filename = os.path.join(out_folder, 'data.hdf5')
 
                 with h5py.File(filename, 'w') as h5_file:
-                    robot_tree, camera_tree = self._read_poses(out_folder, bag)
+                    tf_tree = self._read_poses(out_folder, bag)
                     self._write_calibration(h5_file, bag)
                     left_frames, right_frames = self._gather_images(bag)
-                    left_poses, right_poses = self._gather_poses(robot_tree, camera_tree, left_frames, right_frames)
+                    left_poses, right_poses = self._gather_poses(tf_tree, left_frames, right_frames)
                     self._write_poses(h5_file, left_poses, right_poses)
                     self._encode_video(bag_name, left_poses, right_poses)
 

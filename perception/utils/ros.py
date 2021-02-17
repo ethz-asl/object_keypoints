@@ -1,7 +1,8 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
+from geometry_msgs import msg as geometry_msgs
 
-def transform_message_to_matrix(message):
+def message_to_transform(message):
     T = np.eye(4)
     t = message.transform.translation
     r = message.transform.rotation
@@ -10,3 +11,17 @@ def transform_message_to_matrix(message):
     T[:3, :3] = R.as_matrix()
     return T
 
+def transform_to_message(T, parent_frame, child_frame, timestamp):
+    msg = geometry_msgs.TransformStamped()
+    msg.header.stamp = timestamp
+    msg.header.frame_id = parent_frame
+    msg.child_frame_id = child_frame
+    msg.transform.translation.x = T[0, 3]
+    msg.transform.translation.y = T[1, 3]
+    msg.transform.translation.z = T[2, 3]
+    quat = Rotation.from_matrix(T[:3, :3]).as_quat()
+    msg.transform.rotation.x = quat[0]
+    msg.transform.rotation.y = quat[1]
+    msg.transform.rotation.z = quat[2]
+    msg.transform.rotation.w = quat[3]
+    return msg

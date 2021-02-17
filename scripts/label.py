@@ -7,38 +7,28 @@ import time
 import h5py
 import numpy as np
 import cv2
+import random
+import yaml
 from skvideo import io as video_io
 from perception.utils import linalg
+from constants import *
+from perception.utils import camera_utils
+
+# Ros imports
+import rospy
+import tf2_ros
+from perception.utils import ros as ros_utils
+from geometry_msgs import msg as geometry_msgs
+from scipy.spatial.transform import Rotation
 
 hud.set_data_directory(os.path.dirname(hud.__file__))
 
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
+    parser.add_argument('--calibration', type=str, default='config/calibration.yaml',
+            help="Path to kalibr calibration file.")
     return parser.parse_args()
-
-def to_camera(proj):
-    return np.array([[proj[0], 0., proj[2], 0.],
-        [0., proj[1], proj[3], 0.],
-        [0., 0., 1., 0.]], dtype=np.float64)
-
-KEYPOINT_FILENAME = 'keypoints.json'
-IMAGE_HEIGHT = 720
-IMAGE_WIDTH = 1280
-IMAGE_RECT = hud.Rect(0, 0, IMAGE_WIDTH, IMAGE_HEIGHT)
-image_size = (int(IMAGE_RECT.width), int(IMAGE_RECT.height))
-KEYPOINT_COLOR = np.array([1.0, 0.0, 0.0, 1.0])
-
-LEFT_DIST  = [-0.17461027, 0.02754274, 0.00006249, 0.0000911 ]
-LEFT_PROJ  = [ 697.87732212, 697.28594061, 648.08562626, 371.49958099]
-RIGHT_DIST = [-0.17586632, 0.02861099, -0.0000037, -0.00002747]
-RIGHT_PROJ = [ 695.49625866, 694.75757307, 646.83920067, 367.62123711]
-T_LR = np.array([[1., 0., 0., 0.06297434],
-	[0., 1., 0., 0.00017803],
-        [0., 0., 1., 0.00006404],
-        [0., 0., 0., 1.]], dtype=np.float64)
-LEFT_K = to_camera(LEFT_PROJ)
-RIGHT_K = to_camera(RIGHT_PROJ)
 
 def _write_points(out_file, Xs, left_keypoints, right_keypoints):
     """Writes keypoints to file as json. """
@@ -50,6 +40,17 @@ def _write_points(out_file, Xs, left_keypoints, right_keypoints):
     with open(out_file, 'w') as f:
         f.write(json.dumps(contents))
 
+def to_point_message(point):
+    if point.shape[0] == 4:
+        # Normalize.
+        point /= point[3]
+    msg = geometry_msgs.PointStamped()
+    msg.header.frame_id = 'world'
+    msg.header.stamp = rospy.Time.now()
+    msg.point.x = point[0]
+    msg.point.y = point[1]
+    msg.point.z = point[2]
+    return msg
 
 class PointCommand:
     def __init__(self, point, rect):
@@ -90,7 +91,8 @@ class AddRightPointCommand(PointCommand):
 
 
 class LabelingApp:
-    def __init__(self):
+    def __init__(self, flags):
+        self.flags = flags
         self.current_dir = None
         self.left_video = None
         self.right_video = None
@@ -101,7 +103,14 @@ class LabelingApp:
         self.right_keypoints = []
         self.alpha = 1.0
         self._create_views()
+        self.hdf = None
         self.done = False
+        self._init_ros()
+
+    def _init_ros(self):
+        self.node = rospy.init_node("stereo_label")
+        self.tf_publisher = tf2_ros.TransformBroadcaster()
+        self.point_publisher = rospy.Publisher('keypoint', geometry_msgs.PointStamped, queue_size=1)
 
     def _create_views(self):
         self.window = hud.AppWindow("StereoLabeler", 1920, 540)
@@ -140,6 +149,8 @@ class LabelingApp:
         if os.path.exists(keypoint_path):
             self._load_points(keypoint_path)
 
+        if self.hdf is not None:
+            self.hdf.close()
         self.hdf = h5py.File(os.path.join(path, 'data.hdf5'), 'r')
         self._load_camera_params()
 
@@ -147,10 +158,16 @@ class LabelingApp:
         if self.left_video is not None:
             self.left_video.close()
             self.right_video.close()
+        left_video_length = self.hdf['left/camera_transform'].shape[0]
+        right_video_length = self.hdf['right/camera_transform'].shape[0]
+        self.left_frame_index = 0 # random.randint(0, left_video_length)
+        self.right_frame_index = 0 # random.randint(0, right_video_length)
         self.left_video = video_io.vreader(os.path.join(path, 'left.mp4'))
         self.right_video = video_io.vreader(os.path.join(path, 'right.mp4'))
-        left_frame = next(iter(self.left_video))
-        right_frame = next(iter(self.right_video))
+        for _, left_frame in zip(range(self.left_frame_index + 1), self.left_video):
+            continue
+        for _, right_frame in zip(range(self.right_frame_index + 1), self.right_video):
+            continue
         self.left_image_pane.set_texture(left_frame)
         self.right_image_pane.set_texture(right_frame)
 
@@ -168,12 +185,18 @@ class LabelingApp:
                 self.commands.append(AddRightPointCommand(right, IMAGE_RECT))
 
     def _load_camera_params(self):
-        left = self.hdf['calibration/left']
-        right = self.hdf['calibration/right']
-        self.K = LEFT_K
-        self.Kp = RIGHT_K
-        self.D = np.array(LEFT_DIST)
-        self.Dp = np.array(RIGHT_DIST)
+        calibration_file = self.flags.calibration
+        with open(calibration_file, 'rt') as f:
+            calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        left = calibration['cam0']
+        right = calibration['cam1']
+
+        self.K = camera_utils.camera_matrix(left['intrinsics'])
+        self.Kp = camera_utils.camera_matrix(right['intrinsics'])
+        self.D = np.array(left['distortion_coeffs'])
+        self.Dp = np.array(right['distortion_coeffs'])
+        self.T_RL = np.array(right['T_cn_cnm1'])
+        self.T_LR = np.linalg.inv(self.T_RL)
 
     def _left_pane_clicked(self, event):
         print(f"left pane clicked {event.p.x} {event.p.y}")
@@ -229,29 +252,50 @@ class LabelingApp:
             _write_points(out_file, Xs, self.left_keypoints, self.right_keypoints)
 
     def _triangulate(self, left_point, right_point):
-        T_BL = self.hdf['left/camera_transform'][0]
-        T_BR = self.hdf['right/camera_transform'][0]
-        T_LB = np.linalg.inv(T_BL)
-        T_LR = T_LB @ T_BR
+        T_WL = self.hdf['left/camera_transform'][self.left_frame_index]
+        T_WR = self.hdf['right/camera_transform'][self.right_frame_index]
+        T_LR =  np.linalg.inv(T_WL) @ T_WR
+        print("diff T_LR: ", T_LR - self.T_LR)
+
+        ts = rospy.Time.now()
+        T_WL_msg = ros_utils.transform_to_message(T_WL, 'base_link', 'camera_left', ts)
+        T_WR_msg = ros_utils.transform_to_message(T_WR, 'base_link', 'camera_right', ts)
+        self.tf_publisher.sendTransform(T_WL_msg)
+        self.tf_publisher.sendTransform(T_WR_msg)
 
         x = np.array([left_point.x, left_point.y])[:, None]
         xp = np.array([right_point.x, right_point.y])[:, None]
 
-        out = cv2.triangulatePoints(self.K[:3, :3] @ np.eye(3, 4), self.Kp[:3, :3] @ T_LR[:3], x, xp)
-        out = out / out[3] # Normalize.
+        P1 = camera_utils.projection_matrix(self.K, np.zeros(3), np.eye(3))
+        P2 = camera_utils.projection_matrix(self.Kp, T_LR[:3, 3], T_LR[:3, :3])
 
-        rvec, _ = cv2.Rodrigues(np.eye(3))
-        projected_x, _ = cv2.projectPoints(out[:3], rvec=rvec, tvec=np.zeros(3), cameraMatrix=self.K[:3, :3], distCoeffs=self.D)
+        p_LK = cv2.triangulatePoints(P1, P2, x, xp)
+        p_LK = p_LK / p_LK[3]
+        print("p_LK:", p_LK.T)
+        p_WK = T_WL @ p_LK
+
+        rvec, _ = cv2.Rodrigues(T_WL[:3, :3])
+        projected_x, _ = cv2.projectPoints(p_WK[:3].T, rvec=rvec, tvec=T_WL[:3, 3],
+                cameraMatrix=self.K, distCoeffs=self.D)
         projected_x = projected_x.ravel()
+        print("projected: ", projected_x)
         left_backprojected = hud.Point(projected_x[0], projected_x[1])
         left_backprojected = hud.utils.to_normalized_device_coordinates(left_backprojected, IMAGE_RECT)
-        return out, left_backprojected
+
+        msg = to_point_message(p_WK.ravel())
+        self.point_publisher.publish(msg)
+        T_p = np.eye(4)
+        T_p[:3, 3] = p_WK[:3].ravel()
+        T_p_msg = ros_utils.transform_to_message(T_p, 'base_link', 'keypoint', rospy.Time.now())
+        self.tf_publisher.sendTransform(T_p_msg)
+
+        return p_WK, left_backprojected
 
 
 def main():
     flags = read_args()
 
-    app = LabelingApp()
+    app = LabelingApp(flags)
 
     for subdir in os.listdir(flags.base_dir):
         path = os.path.join(flags.base_dir, subdir)
