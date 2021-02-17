@@ -83,6 +83,7 @@ class ViewModel:
         T_LW = np.linalg.inv(T_WL)
         T_RW = np.linalg.inv(T_WR)
         T_RL = np.linalg.inv(T_WR) @ T_WL
+        T_LR = np.linalg.inv(T_RL)
         left_frame_points = []
         right_frame_points = []
         for p_WK in self.world_points:
@@ -92,13 +93,19 @@ class ViewModel:
             now = rospy.Time.now()
             msg_l = ros_utils.transform_to_message(T_WL, 'base_link', 'camera_left', now)
             msg_r = ros_utils.transform_to_message(T_WR, 'base_link', 'camera_right', now)
+
             self.tf_publisher.sendTransform(msg_l)
             self.tf_publisher.sendTransform(msg_r)
 
-            p_l = self.K @ np.eye(3, 4) @ p_LK
-            p_r = self.Kp @ np.eye(3, 4) @ p_RK
+            p_l = self.K @ np.eye(3, 4) @ T_LW @ p_WK
+            p_r = self.Kp @ np.eye(3, 4) @ T_RW @ p_WK
             p_l = p_l / p_l[2]
             p_r = p_r / p_r[2]
+
+            T_WK = np.eye(4)
+            T_WK[:, 3] = p_WK
+            msg_k = ros_utils.transform_to_message(T_WK, 'base_link', 'keypoint', now)
+            self.tf_publisher.sendTransform(msg_k)
 
             left_frame_points.append(
                     hud.utils.to_normalized_device_coordinates(
@@ -124,6 +131,7 @@ class ViewModel:
 class PointVisualizer:
     def __init__(self, flags):
         self.flags = flags
+        self.done = False
         self.window = hud.AppWindow("Keypoints", 1280, 720)
         self._create_views()
         self._init_ros()
@@ -148,6 +156,11 @@ class PointVisualizer:
         h_stack.add_view(z_stack)
         h_stack.add_view(z_stack_r)
         self.window.set_view(h_stack)
+        self.window.add_key_handler(self._key_callback)
+
+    def _key_callback(self, event):
+        if event.key == 'Q':
+            self.done = True
 
     def run(self):
         directories = os.listdir(self.flags.base_dir)
@@ -159,8 +172,8 @@ class PointVisualizer:
                     self.right_image_pane.set_texture(right_frame)
                     self.left_image_points.set_points(left_points, constants.KEYPOINT_COLOR[None].repeat(len(left_points), 0))
                     self.right_image_points.set_points(right_points, constants.KEYPOINT_COLOR[None].repeat(len(right_points), 0))
-                    if not self.window.update():
-                        break
+                    if not self.window.update() or self.done:
+                        return
                     self.window.poll_events()
                     time.sleep(0.05)
             finally:

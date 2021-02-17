@@ -13,7 +13,7 @@ def projection_matrix(camera_matrix, p_WC, R_WC):
     R_WC: the camera rotation expressed in world frame.
     """
     RT = np.zeros((3, 4))
-    RT[:3, :3] = R_WC
+    RT[:3, :3] = R_WC.T
     RT[:3, 3] = -p_WC
     return camera_matrix @ RT
 
