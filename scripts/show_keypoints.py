@@ -75,14 +75,14 @@ class ViewModel:
         return self
 
     def __next__(self):
-        print(f"Current frame {self.current_frame}, num frames: {self.num_frames}")
+        print(f"Current frame {self.current_frame}, num frames: {self.num_frames}" + 5 * " ", end="\r")
         if self.current_frame >= self.num_frames:
             raise StopIteration()
         T_WL = self.hdf['left/camera_transform'][self.current_frame]
         T_WR = self.hdf['right/camera_transform'][self.current_frame]
         T_LW = np.linalg.inv(T_WL)
         T_RW = np.linalg.inv(T_WR)
-        T_RL = np.linalg.inv(T_WR) @ T_WL
+        T_RL = T_RW @ T_WL
         T_LR = np.linalg.inv(T_RL)
         left_frame_points = []
         right_frame_points = []
@@ -132,7 +132,7 @@ class PointVisualizer:
     def __init__(self, flags):
         self.flags = flags
         self.done = False
-        self.window = hud.AppWindow("Keypoints", 1280, 720)
+        self.window = hud.AppWindow("Keypoints", 1280, 360)
         self._create_views()
         self._init_ros()
 
@@ -175,7 +175,7 @@ class PointVisualizer:
                     if not self.window.update() or self.done:
                         return
                     self.window.poll_events()
-                    time.sleep(0.05)
+                    time.sleep(0.01)
             finally:
                 view_model.close()
 

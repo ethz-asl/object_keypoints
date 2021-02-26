@@ -144,6 +144,30 @@ class LabelingApp:
         self.window.set_view(main_view)
         self.window.add_key_handler(self._key_callback)
 
+    def _find_furthest(self):
+        left_video_length = self.hdf['left/camera_transform'].shape[0]
+        right_video_length = self.hdf['right/camera_transform'].shape[0]
+        distance_matrix = np.zeros((left_video_length, right_video_length))
+        smallest_index = (None, None)
+        value = 1.0
+        for i in range(0, left_video_length, 25):
+            for j in range(0, right_video_length, 25):
+                T_WL = self.hdf['left/camera_transform'][i]
+                T_WR = self.hdf['right/camera_transform'][j]
+                if np.linalg.norm(T_WL[:3, 3] - T_WR[:3, 3]) < 0.1:
+                    # Skip if the viewpoints are too close to each other.
+                    continue
+                # Points are 1 meter along the z-axis from the camera position.
+                z_L = T_WL[2, :3]
+                z_R = T_WR[2, :3]
+
+                dot = np.abs(z_L.dot(z_R))
+                if dot < value:
+                    value = dot
+                    smallest_index = (i, j)
+        print("Furthest frames: ", *smallest_index)
+        return smallest_index
+
     def set_current(self, path):
         self.done = False
         self.left_back_projected_points.clear_points()
@@ -161,10 +185,8 @@ class LabelingApp:
         if self.left_video is not None:
             self.left_video.close()
             self.right_video.close()
-        left_video_length = self.hdf['left/camera_transform'].shape[0]
-        right_video_length = self.hdf['right/camera_transform'].shape[0]
-        self.left_frame_index = random.randint(0, left_video_length // 4)
-        self.right_frame_index = random.randint(0, right_video_length // 4)
+        self.left_frame_index, self.right_frame_index = self._find_furthest()
+
         self.left_video = video_io.vreader(os.path.join(path, 'left.mp4'))
         self.right_video = video_io.vreader(os.path.join(path, 'right.mp4'))
         for _, left_frame in zip(range(self.left_frame_index + 1), self.left_video):
@@ -205,7 +227,6 @@ class LabelingApp:
 
                 T_WK = np.eye(4)
                 T_WK[:3, 3] = point[:3]
-                print("keypoint:", point)
                 T_WK_msg = ros_utils.transform_to_message(T_WK, 'base_link', 'keypoint', rospy.Time.now())
                 self.tf_publisher.sendTransform(T_WK_msg)
 
