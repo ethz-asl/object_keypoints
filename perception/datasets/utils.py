@@ -23,6 +23,19 @@ class RoundRobin(data.IterableDataset):
                 datasets[i] = iter(self.datasets[i])
                 continue
 
+class Chain(data.IterableDataset):
+    def __init__(self, datasets, shuffle=True):
+        self.shuffle = shuffle
+        self.datasets = datasets
+
+    def __iter__(self):
+        datasets = self.datasets
+        if self.shuffle:
+            random.shuffle(datasets)
+        for dataset in self.datasets:
+            for item in dataset:
+                yield item
+
 class SamplingPool(data.IterableDataset):
     """
     Maintains a pool of N examples and samples randomly from that pool.

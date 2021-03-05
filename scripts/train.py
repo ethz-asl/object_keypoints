@@ -1,17 +1,25 @@
 import argparse
 import os
 import torch
-from perception.datasets.video import StereoVideoDataset
-from perception.datasets.utils import RoundRobin, SamplingPool
 import numpy as np
 from matplotlib import pyplot as plt
 from albumentations.augmentations import transforms
 import albumentations as A
+from torch.nn import functional as F
+from torch.utils.data import DataLoader
+from perception.datasets.video import StereoVideoDataset
+from perception.datasets.utils import RoundRobin, SamplingPool, Chain
+from perception.models import KeypointNet
+import pytorch_lightning as pl
 
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('data')
     parser.add_argument('--workers', '-w', type=int, default=4, help="How many workers to use in data loader.")
+    parser.add_argument('--batch-size', default=8, type=int)
+    parser.add_argument('--gpus', type=int, default=1)
+    parser.add_argument('--fp16', action='store_true', help="Use half-precision.")
+    parser.add_argument('--pool', default=1000, type=int, help="How many examples to use in shuffle pool")
     return parser.parse_args()
 
 def _to_image(image):
@@ -20,38 +28,84 @@ def _to_image(image):
     image = image + np.array([0.5, 0.5, 0.5])
     return np.clip((image * 255.0).round(), 0.0, 255.0).astype(np.uint8)
 
-class Runner:
+class KeypointModule(pl.LightningModule):
     def __init__(self):
-        self.flags = read_args()
-        self._load_datasets()
+        super().__init__()
+        self._load_model()
 
-    def _load_datasets(self):
+    def _load_model(self):
+        self.model = KeypointNet()
+
+    def forward(self, frame):
+        return self.model(frame)
+
+    def training_step(self, batch, batch_idx):
+        frame, target = batch
+        y_hat = self.model(frame)
+
+        loss = F.mse_loss(y_hat, target)
+
+        self.log('train_loss', loss)
+        return loss
+
+
+    def validation_step(self, batch, batch_idx):
+        frame, target = batch
+        y_hat = self.model(frame)
+
+        loss = F.mse_loss(y_hat, target)
+
+        self.log('val_loss', loss)
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-4)
+
+
+def _build_datasets(sequences, **kwargs):
+    datasets = []
+    for sequence in sequences:
+        dataset = StereoVideoDataset(sequence, **kwargs)
+        datasets.append(dataset)
+    return datasets
+
+class DataModule(pl.LightningDataModule):
+    def __init__(self, flags):
+        super().__init__()
         datasets = []
-        directories = os.listdir(self.flags.data)
-        for directory in directories:
-            path = os.path.join(self.flags.data, directory)
-            dataset = StereoVideoDataset(path)
-            datasets.append(dataset)
-        self.train = SamplingPool(RoundRobin(datasets), 10)
+        directories = os.listdir(flags.data)
+        sequences = sorted([os.path.join(flags.data, d) for d in directories])
+        val_sequences = 2
+        self.flags = flags
+        self.train_sequences = sequences[:len(sequences)-val_sequences]
+        self.val_sequences = sequences[len(sequences)-val_sequences:]
 
-    def run(self):
-        dataloader = torch.utils.data.DataLoader(self.train,
-                num_workers=self.flags.workers)
-        for (left_frame, left_target), (right_frame, right_target) in dataloader:
-            plt.figure(figsize=(14, 5))
-            axis = plt.subplot2grid((1, 2), loc=(0, 0))
-            axis.imshow(_to_image(left_frame[0].numpy()))
-            axis.imshow(left_target[0].sum(axis=0).numpy(), alpha=0.7)
-            plt.axis('off')
-            axis = plt.subplot2grid((1, 2), loc=(0, 1))
-            axis.imshow(_to_image(right_frame[0].numpy()))
-            axis.imshow(right_target[0].sum(axis=0).numpy(), alpha=0.7)
-            plt.axis('off')
-            plt.tight_layout()
-            plt.show()
+    def setup(self, stage):
+        if stage == 'fit':
+            train_datasets = _build_datasets(self.train_sequences, augment=True, random_crop=True)
+            val_datasets = _build_datasets(self.val_sequences)
+            self.train = SamplingPool(Chain(train_datasets), self.flags.pool)
+            self.val = Chain(val_datasets, shuffle=False)
+        else:
+            raise NotImplementedError()
 
+    def train_dataloader(self):
+        return DataLoader(self.train, batch_size=self.flags.batch_size, num_workers=self.flags.workers)
 
+    def val_dataloader(self):
+        return DataLoader(self.val, batch_size=self.flags.batch_size * 2, num_workers=self.flags.workers)
+
+def main():
+    flags = read_args()
+    data_module = DataModule(flags)
+    module = KeypointModule()
+
+    trainer = pl.Trainer(
+            gpus=flags.gpus,
+            precision=16 if flags.fp16 else 32)
+
+    trainer.fit(module, data_module)
 
 if __name__ == "__main__":
-    Runner().run()
+    main()
 
