@@ -23,6 +23,8 @@ def _compute_kernel(size, center):
             x = np.array([i, j], dtype=np.float32)
             kernel[i, j] = _gaussian_kernel(center, x)
     return kernel / kernel.sum()
+RGB_MEAN = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+RGB_STD = np.array([0.25, 0.25, 0.25], dtype=np.float32)
 
 class StereoVideoDataset(IterableDataset):
     LEFT = 0
@@ -58,8 +60,8 @@ class StereoVideoDataset(IterableDataset):
             self.augmentations = A.Compose([
                 A.Resize(height=self.image_size[0], width=self.image_size[1])
             ], additional_targets={'image': 'image', 'target0': 'mask', 'target1': 'mask'})
-        self.mean = np.array([0.5, 0.5, 0.5], dtype=np.float32)
-        self.std = np.array([0.25, 0.25, 0.25], dtype=np.float32)
+        self.mean = RGB_MEAN
+        self.std = RGB_STD
 
     def _init_videos(self):
         return left_video, right_video
@@ -158,5 +160,17 @@ class StereoVideoDataset(IterableDataset):
         target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
 
         return frame, (target / self.kernel_max * 2.0)  - 1.0
+
+    @staticmethod
+    def to_image(image):
+        """
+        Converts from torch.tensor to numpy array and reverses the image normalization process.
+        Gives you a np.array with uint8 values in the range 0-255.
+        image: torch.tensor 3 x H X W
+        returns: np.uint8 array H x W x 3
+        """
+        image = image.numpy().transpose([1, 2, 0])
+        return np.clip((image * RGB_STD + RGB_MEAN) * 255.0, 0.0, 255.0).astype(np.uint8)
+
 
 
