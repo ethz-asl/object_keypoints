@@ -97,19 +97,19 @@ class StereoVideoDataset(IterableDataset):
             x = round(point[0])
             y = round(point[1])
             x_start = max(x - self.kernel_center, 0)
-            x_end = min(x + self.kernel_center, self.width)
+            x_end = max(min(x + self.kernel_center, self.width), 0)
             y_start = max(y - self.kernel_center, 0)
-            y_end = min(y + self.kernel_center, self.height)
+            y_end = max(min(y + self.kernel_center, self.height), 0)
             y_range_start = 0
             y_range_end = self.kernel_size
             x_range_start = 0
             x_range_end = self.kernel_size
-            if y - self.kernel_center < 0:
+            if y_start < self.kernel_center:
                 y_range_start = abs(y - self.kernel_center)
             if y + self.kernel_center >= self.height:
                 past_end = max(y + self.kernel_center - self.height, 0)
                 y_range_end = y_range_start + self.kernel_size - past_end
-            if x - self.kernel_center < 0:
+            if x_start < self.kernel_center:
                 x_range_start = abs(x - self.kernel_center)
             if x + self.kernel_center > self.width:
                 past_end = max(x + self.kernel_center - self.width, 0)

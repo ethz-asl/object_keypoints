@@ -27,5 +27,15 @@ class VideoDatasetTest(unittest.TestCase):
         self.assertNotEqual(target.max(), kernel[25, 25])
         self.assertEqual(target[60, 159], target.max())
 
+        # Past end along both axes
+        target = np.zeros((120, 160), dtype=np.float32)
+        StereoVideoDataset._add_kernel(dataset, target, kernel, np.array([[165., 130.]]))
+        self.assertEqual(target[119, 159], target.max())
+
+        # Before beginning.
+        target = np.zeros((120, 160), dtype=np.float32)
+        StereoVideoDataset._add_kernel(dataset, target, kernel, np.array([[-10., -130.]]))
+        self.assertEqual(target[0, 1], target.max())
+
 if __name__ == "__main__":
     unittest.main()
