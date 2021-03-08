@@ -66,7 +66,7 @@ class SamplingPool(data.IterableDataset):
 
         # If the dataset is exhausted, empty the pool.
         while len(pool) > 0:
-            yield pool[random.randint(0, len(pool))]
-
-
+            random_index = random.randint(0, len(pool)-1)
+            yield pool[random_index]
+            del pool[random_index]
 

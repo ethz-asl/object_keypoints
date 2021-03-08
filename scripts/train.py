@@ -15,7 +15,7 @@ import pytorch_lightning as pl
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('data')
-    parser.add_argument('--workers', '-w', type=int, default=4, help="How many workers to use in data loader.")
+    parser.add_argument('--workers', '-w', type=int, default=8, help="How many workers to use in data loader.")
     parser.add_argument('--batch-size', default=8, type=int)
     parser.add_argument('--gpus', type=int, default=1)
     parser.add_argument('--fp16', action='store_true', help="Use half-precision.")
@@ -43,23 +43,23 @@ class KeypointModule(pl.LightningModule):
         frame, target = batch
         y_hat = self.model(frame)
 
-        loss = F.mse_loss(y_hat, target)
+        loss = F.mse_loss(torch.tanh(y_hat), target)
 
         self.log('train_loss', loss)
-        return loss
 
+        return loss
 
     def validation_step(self, batch, batch_idx):
         frame, target = batch
         y_hat = self.model(frame)
 
-        loss = F.mse_loss(y_hat, target)
+        loss = F.mse_loss(torch.tanh(y_hat), target)
 
         self.log('val_loss', loss)
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=1e-4)
+        return torch.optim.Adam(self.parameters(), lr=3e-4)
 
 
 def _build_datasets(sequences, **kwargs):
@@ -82,8 +82,12 @@ class DataModule(pl.LightningDataModule):
 
     def setup(self, stage):
         if stage == 'fit':
-            train_datasets = _build_datasets(self.train_sequences, augment=True, random_crop=True)
-            val_datasets = _build_datasets(self.val_sequences)
+            train_datasets = []
+            for camera in [0, 1]:
+                for augment in [False, True]:
+                    train_datasets += _build_datasets(self.train_sequences, augment=augment, random_crop=augment, camera=camera)
+            val_datasets = (_build_datasets(self.val_sequences, augment=False, random_crop=False) +
+                    _build_datasets(self.val_sequences, augment=False, random_crop=False, camera=1))
             self.train = SamplingPool(Chain(train_datasets), self.flags.pool)
             self.val = Chain(val_datasets, shuffle=False)
         else:
