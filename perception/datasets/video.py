@@ -104,16 +104,19 @@ class StereoVideoDataset(IterableDataset):
             y_range_end = self.kernel_size
             x_range_start = 0
             x_range_end = self.kernel_size
-            if y_start < self.kernel_center:
+            if y_start == 0:
                 y_range_start = abs(y - self.kernel_center)
             if y + self.kernel_center >= self.height:
                 past_end = max(y + self.kernel_center - self.height, 0)
                 y_range_end = y_range_start + self.kernel_size - past_end
-            if x_start < self.kernel_center:
+            if x_start == 0:
                 x_range_start = abs(x - self.kernel_center)
             if x + self.kernel_center > self.width:
                 past_end = max(x + self.kernel_center - self.width, 0)
                 x_range_end = x_range_start + self.kernel_size - past_end
+            if (y_range_end - y_range_start) < 0 or (x_range_end - x_range_start) < 0:
+                continue
+
             target[y_start:y_end, x_start:x_end] += kernel[y_range_start:y_range_end, x_range_start:x_range_end]
 
 
@@ -166,10 +169,10 @@ class StereoVideoDataset(IterableDataset):
         """
         Converts from torch.tensor to numpy array and reverses the image normalization process.
         Gives you a np.array with uint8 values in the range 0-255.
-        image: torch.tensor 3 x H X W
+        image: numpy array 3 x H X W
         returns: np.uint8 array H x W x 3
         """
-        image = image.numpy().transpose([1, 2, 0])
+        image = np.transpose(image, [1, 2, 0])
         return np.clip((image * RGB_STD + RGB_MEAN) * 255.0, 0.0, 255.0).astype(np.uint8)
 
 

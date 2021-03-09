@@ -88,7 +88,7 @@ class DataModule(pl.LightningDataModule):
                     train_datasets += _build_datasets(self.train_sequences, augment=augment, random_crop=augment, camera=camera)
             val_datasets = (_build_datasets(self.val_sequences, augment=False, random_crop=False) +
                     _build_datasets(self.val_sequences, augment=False, random_crop=False, camera=1))
-            self.train = SamplingPool(Chain(train_datasets), self.flags.pool)
+            self.train = SamplingPool(Chain(train_datasets, shuffle=True), self.flags.pool)
             self.val = Chain(val_datasets, shuffle=False)
         else:
             raise NotImplementedError()

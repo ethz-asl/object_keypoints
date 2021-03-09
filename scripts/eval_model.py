@@ -65,10 +65,10 @@ class Runner:
         return sorted([os.path.join(self.flags.data, s) for s in os.listdir(self.flags.data)])
 
     def _loader(self, dataset):
-        return DataLoader(dataset, num_workers=1, batch_size=1)
+        return DataLoader(dataset, num_workers=0, batch_size=1)
 
     def _to_image(self, frame):
-        frame = StereoVideoDataset.to_image(frame[0])
+        frame = StereoVideoDataset.to_image(frame[0].numpy())
         return cv2.resize(frame, self.IMAGE_SIZE)
 
     def _to_heatmap(self, target):
