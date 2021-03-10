@@ -3,5 +3,6 @@ scikit-video==1.1.11
 hud==0.1
 albumentations
 efficientnet_pytorch
+pytorch-lightning==1.2.1
 
 

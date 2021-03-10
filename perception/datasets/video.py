@@ -172,7 +172,7 @@ class StereoVideoDataset(IterableDataset):
         image: numpy array 3 x H X W
         returns: np.uint8 array H x W x 3
         """
-        image = np.transpose(image, [1, 2, 0])
+        image = image.transpose([1, 2, 0])
         return np.clip((image * RGB_STD + RGB_MEAN) * 255.0, 0.0, 255.0).astype(np.uint8)
 
 
