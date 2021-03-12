@@ -4,13 +4,14 @@ from torchvision.models._utils import IntermediateLayerGetter
 from efficientnet_pytorch import EfficientNet
 
 class KeypointNet(nn.Module):
-    def __init__(self):
+    def __init__(self, out_features=2):
         super().__init__()
-        self.backbone = EfficientNet.from_pretrained('efficientnet-b2', include_top=False)
-        self.features = 1408
-        self._deconvs = self._build_deconv_layers([512, 256, 128])
-        self.out_conv = nn.Conv2d(in_channels=128,
-                out_channels=2,
+        self.backbone = EfficientNet.from_pretrained('efficientnet-b0', include_top=False)
+        self.features = 1280
+        feature_maps = [256, 128, 64]
+        self._deconvs = self._build_deconv_layers(feature_maps)
+        self.out_conv = nn.Conv2d(in_channels=feature_maps[-1],
+                out_channels=out_features,
                 kernel_size=1,
                 stride=1,
                 bias=True,
@@ -36,14 +37,14 @@ class KeypointNet(nn.Module):
             if i == 1:
                 # With input 360x640 we get output 48 x 160 at this point.
                 # Correct to get proper output aspect ratio.
-                layers.append(nn.UpsamplingBilinear2d(size=(45, 80)))
+                layers.append(nn.UpsamplingNearest2d(size=(45, 80)))
             in_features = out_features
 
         return nn.Sequential(*layers)
-
 
     def forward(self, x):
         x = self.backbone.extract_features(x)
         x = self._deconvs(x)
         x = self.out_conv(x)
         return x
+

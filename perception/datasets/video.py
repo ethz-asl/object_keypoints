@@ -47,6 +47,7 @@ class StereoVideoDataset(IterableDataset):
         self.target_size = target_size
         self.camera = camera
         self.image_size = 360, 640
+        self.resize_target = self.image_size != tuple(target_size)
         self.include_pose = include_pose
 
         if augment:
@@ -163,7 +164,8 @@ class StereoVideoDataset(IterableDataset):
         target[0] = out['target0']
         target[1] = out['target1']
         target = torch.tensor(target)
-        target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
+        if self.resize_target:
+            target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
 
         target = (target / self.kernel_max * 2.0) - 1.0
         if not self.include_pose:

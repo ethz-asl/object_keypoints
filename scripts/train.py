@@ -34,7 +34,7 @@ class KeypointModule(pl.LightningModule):
         self._load_model()
 
     def _load_model(self):
-        self.model = KeypointNet()
+        self.model = KeypointNet(2)
 
     def forward(self, frame):
         return self.model(frame)
