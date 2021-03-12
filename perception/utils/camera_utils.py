@@ -6,14 +6,10 @@ def camera_matrix(intrinsics):
         [0., fy, cy],
         [0., 0., 1.]])
 
-def projection_matrix(camera_matrix, p_WC, R_WC):
+def projection_matrix(camera_matrix, T_CW):
     """
     camera_matrix: 3 x 3 camera calibration matrix.
-    p_WC: the camera center point expressed in world frame.
-    R_WC: the camera rotation expressed in world frame.
+    T_CW: 4x4 matrix transform from global to camera frame.
     """
-    RT = np.zeros((3, 4))
-    RT[:3, :3] = R_WC.T
-    RT[:3, 3] = -p_WC
-    return camera_matrix @ RT
+    return camera_matrix @ T_CW[:3, :]
 

@@ -4,5 +4,6 @@ hud==0.1
 albumentations
 efficientnet_pytorch
 pytorch-lightning==1.2.1
+scikit-learn==0.24.1
 
 

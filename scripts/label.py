@@ -321,7 +321,7 @@ class LabelingApp:
         x = np.array([left_point.x, left_point.y])[:, None]
         xp = np.array([right_point.x, right_point.y])[:, None]
 
-        P1 = camera_utils.projection_matrix(self.K, np.zeros(3), np.eye(3))
+        P1 = camera_utils.projection_matrix(self.K, np.eye(4))
         P2 = self.Kp @ np.eye(3, 4) @ T_RL
 
         p_LK = cv2.triangulatePoints(P1, P2, x, xp)

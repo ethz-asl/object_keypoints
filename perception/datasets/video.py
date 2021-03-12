@@ -23,6 +23,7 @@ def _compute_kernel(size, center):
             x = np.array([i, j], dtype=np.float32)
             kernel[i, j] = _gaussian_kernel(center, x)
     return kernel / kernel.sum()
+
 RGB_MEAN = np.array([0.5, 0.5, 0.5], dtype=np.float32)
 RGB_STD = np.array([0.25, 0.25, 0.25], dtype=np.float32)
 
@@ -36,7 +37,8 @@ class StereoVideoDataset(IterableDataset):
     width = 1280
     height = 720
 
-    def __init__(self, base_dir, augment=False, target_size=[90, 160], camera=None, random_crop=False):
+    def __init__(self, base_dir, augment=False, target_size=[90, 160], camera=None, random_crop=False,
+            include_pose=False):
         if camera is None:
             camera = self.LEFT
         self.base_dir = os.path.expanduser(base_dir)
@@ -45,6 +47,7 @@ class StereoVideoDataset(IterableDataset):
         self.target_size = target_size
         self.camera = camera
         self.image_size = 360, 640
+        self.include_pose = include_pose
 
         if augment:
             augmentations = []
@@ -162,7 +165,11 @@ class StereoVideoDataset(IterableDataset):
         target = torch.tensor(target)
         target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
 
-        return frame, (target / self.kernel_max * 2.0)  - 1.0
+        target = (target / self.kernel_max * 2.0) - 1.0
+        if not self.include_pose:
+            return frame, target
+        else:
+            return frame, target, T_WC
 
     @staticmethod
     def to_image(image):
