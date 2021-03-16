@@ -37,7 +37,7 @@ class KeypointNet(nn.Module):
             if i == 1:
                 # With input 360x640 we get output 48 x 160 at this point.
                 # Correct to get proper output aspect ratio.
-                layers.append(nn.UpsamplingNearest2d(size=(45, 80)))
+                layers.append(nn.UpsamplingBilinear2d(size=(45, 80)))
             in_features = out_features
 
         return nn.Sequential(*layers)

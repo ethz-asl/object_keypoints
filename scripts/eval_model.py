@@ -9,9 +9,9 @@ import yaml
 from torch.utils.data import DataLoader
 from perception.datasets.video import StereoVideoDataset
 from perception.utils import Rate, camera_utils, clustering_utils, linalg
-from train import KeypointModule
 from matplotlib import cm
 from matplotlib import pyplot
+from perception.pipeline import *
 
 hud.set_data_directory(os.path.dirname(hud.__file__))
 
@@ -24,8 +24,6 @@ def read_args():
     parser.add_argument('--write', type=str, help="Write frames to folder.")
     return parser.parse_args()
 
-PROBABILITY_CUTOFF = 0.1
-
 class Sequence:
     def __init__(self, flags, sequence, prediction_size=(90, 160)):
         self.flags = flags
@@ -34,15 +32,8 @@ class Sequence:
         self.left_loader = self._loader(StereoVideoDataset(sequence, camera=0, augment=False, include_pose=True))
         self.right_loader = self._loader(StereoVideoDataset(sequence, camera=1, augment=False, include_pose=True))
         self._load_calibration()
-        self.indices = np.zeros((*prediction_size, 2), dtype=np.float32)
-        for y in range(prediction_size[0]):
-            for x in range(prediction_size[1]):
-                self.indices[y, x, 0] = np.float32(x) + 1.0
-                self.indices[y, x, 1] = np.float32(y) + 1.0
 
-        self.prediction_to_image_scaling_factor = np.array(self.image_size[::-1]) / np.array(self.prediction_size[::-1])
-        self.clustering_left = clustering_utils.KeypointClustering()
-        self.clustering_right = clustering_utils.KeypointClustering()
+        self.scaling_factor = np.array(self.image_size[::-1]) / np.array(self.prediction_size[::-1])
 
     def _loader(self, dataset):
         return DataLoader(dataset, num_workers=1, batch_size=self.flags.batch_size)
@@ -60,64 +51,6 @@ class Sequence:
         self.T_RL = np.array(calibration['cam1']['T_cn_cnm1'])
         self.image_size = calibration['cam1']['resolution'][::-1]
 
-    def _find_keypoints(self, predictions, left=True):
-        predictions += 1.0
-        predictions *= 0.5
-        keypoints = np.zeros((4, 2), dtype=predictions.dtype)
-        # Center point
-        center_point = predictions[0]
-        where_larger = center_point > PROBABILITY_CUTOFF
-        left_center = self.indices[where_larger, :]
-        probabilities_center = center_point[where_larger]
-        probabilities_center /= probabilities_center.sum()
-        keypoints[0, :] = (left_center * probabilities_center[:, None]).sum(axis=0)
-
-        # Three spoke points.
-        spokes = predictions[1]
-        where_larger = spokes > PROBABILITY_CUTOFF
-        spoke_indices = self.indices[where_larger, :]
-        probabilities_spoke = spokes[where_larger]
-        if left:
-            clusters = self.clustering_left(spoke_indices, probabilities_spoke)
-        else:
-            clusters = self.clustering_right(spoke_indices, probabilities_spoke)
-        keypoints[1:1+clusters.shape[0], :] = clusters
-        return keypoints
-
-    def _associate_keypoints(self, left_keypoints, right_keypoints):
-        R = self.T_RL[:3, :3]
-        t = self.T_RL[:3, 3]
-        Kp_inv = np.linalg.inv(self.Kp)
-
-        C = linalg.skew_matrix(self.K @ R.T @ t)
-        F = Kp_inv.T @ R @ self.K.T @ C
-
-        distances = np.zeros((left_keypoints.shape[0], right_keypoints.shape[0]), dtype=left_keypoints.dtype)
-        one = np.ones((1,), dtype=left_keypoints.dtype)
-        for i in range(left_keypoints.shape[0]):
-            v1 = np.concatenate([left_keypoints[i, :], one], axis=0)[:, None]
-            for j in range(right_keypoints.shape[0]):
-                v2 = np.concatenate([right_keypoints[j, :], one], axis=0)[:, None]
-                distances[i, j] = np.abs(v2.T @ F @ v1)
-        return distances.argmin(axis=1)
-
-    def triangulate(self, prediction_left, prediction_right, T_LW, T_RW):
-        left_keypoints = self._find_keypoints(prediction_left, True)
-        right_keypoints = self._find_keypoints(prediction_right, False)
-        left_keypoints = self._scale_points(left_keypoints)
-        right_keypoints = self._scale_points(right_keypoints)
-        associations = self._associate_keypoints(left_keypoints, right_keypoints)
-        # Permute keypoints into the same order as left.
-        right_keypoints = right_keypoints[associations]
-
-        P1 = camera_utils.projection_matrix(self.K, np.eye(4))
-        P2 = self.Kp @ np.eye(3, 4) @ self.T_RL
-        p_LK = cv2.triangulatePoints(P1, P2, left_keypoints.T, right_keypoints.T).T # N x 4
-        p_LK = p_LK / p_LK[:, 3:4]
-        p_WK = (np.linalg.inv(T_LW) @ p_LK[:, :, None])[:, :, 0]
-        p_WK /= p_WK[:, 3:4]
-        return p_WK
-
     def to_frame_points(self, p_WK, T_CW):
         """
         p_WK: N x 4 homogenous world coordinates
@@ -130,11 +63,10 @@ class Sequence:
         normalized[:, 1] *= -1.0
         return normalized
 
-    def _scale_points(self, points):
-        # points: N x 2 image points on the prediction heatmap.
-        # returns: N x 2 image points scaled to the full image size.
-        return points * self.prediction_to_image_scaling_factor
-
+    def project_points(self, p_WK, T_CW, K):
+        image_points = K @ np.eye(3, 4) @ T_CW @ p_WK[:, :, None]
+        image_points = image_points[:, :, 0]
+        return (image_points / image_points[:, 2:3])[:, :2]
 
 
 def _point_colors(n):
@@ -203,11 +135,11 @@ class Runner:
         else:
             self.visualizer = None
             self.figure = pyplot.figure(figsize=(16, 4.5))
-        self._load_model()
         self.frame_number = 0
+        self._setup_pipeline()
 
-    def _load_model(self):
-        self.model = KeypointModule.load_from_checkpoint(self.flags.model)
+    def _setup_pipeline(self):
+        self.pipeline = KeypointPipeline(self.flags.model, 3)
 
     def _sequences(self):
         return sorted([os.path.join(self.flags.data, s) for s in os.listdir(self.flags.data)])
@@ -222,30 +154,40 @@ class Runner:
         target = (cm.inferno(target) * 255.0).astype(np.uint8)[:, :, :3]
         return cv2.resize(target[:, :, :3], self.IMAGE_SIZE)
 
-    def _predict(self, frame):
-        return torch.tanh(self.model(frame)).cpu().numpy()
-
-    def _write_frames(self, left, right):
+    def _write_frames(self, left, left_points, right, right_points):
+        x_scaling = left.shape[1] / 1280.0
+        y_scaling = left.shape[0] / 720.0
         axis = pyplot.subplot2grid((1, 2), loc=(0, 0), fig=self.figure)
         axis.imshow(left)
+        axis.scatter(left_points[:, 0] * x_scaling, left_points[:, 1] * y_scaling, s=5.0, color='y')
         axis.axis('off')
         axis = pyplot.subplot2grid((1, 2), loc=(0, 1), fig=self.figure)
         axis.imshow(right)
+        axis.scatter(right_points[:, 0] * x_scaling, right_points[:, 1] * y_scaling, s=5.0, color='y')
         axis.axis('off')
         self.figure.savefig(os.path.join(self.flags.write, f'{self.frame_number:06}.jpg'), pil_kwargs={'quality': 85}, bbox_inches='tight')
         self.figure.clf()
 
     def _play_predictions(self, sequence):
+        self.pipeline.reset(sequence.K, sequence.Kp, sequence.T_RL, sequence.scaling_factor)
+
+        rate = Rate(60)
         for i, ((left_frame, l_target, T_WL), (right_frame, r_target, T_WR)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
+            N = left_frame.shape[0]
+            T_LW = np.linalg.inv(T_WL.numpy())
+            T_RW = np.linalg.inv(T_WR.numpy())
+            pipeline_out = self.pipeline(left_frame, T_LW, right_frame, T_WR)
+
+            left_frame = left_frame.cpu().numpy()
+            right_frame = right_frame.cpu().numpy()
+
             if self.flags.ground_truth:
                 predictions_left = l_target
                 predictions_right = r_target
             else:
-                predictions_left = self._predict(left_frame)
-                predictions_right = self._predict(right_frame)
-            rate = Rate(60)
-            left_frame = left_frame.cpu().numpy()
-            right_frame = right_frame.cpu().numpy()
+                predictions_left = pipeline_out['heatmap_left']
+                predictions_right = pipeline_out['heatmap_right']
+
             for i in range(min(left_frame.shape[0], right_frame.shape[0])):
                 print(f"Frame {self.frame_number:06}", end='\r')
                 left_rgb = self._to_image(left_frame[i])
@@ -256,14 +198,13 @@ class Runner:
                 image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
                 image_right = (0.3 * right_rgb + 0.7 * heatmap_right).astype(np.uint8)
 
+                p_WK = pipeline_out['keypoints_world'][i]
+
                 if self.flags.write:
-                    self._write_frames(image_left, image_right)
+                    left_points = sequence.project_points(p_WK, T_LW, sequence.K)
+                    right_points = sequence.project_points(p_WK, T_RW, sequence.Kp)
+                    self._write_frames(image_left, left_points, image_right, right_points)
                 else:
-                    T_LW = np.linalg.inv(T_WL[i].numpy())
-                    T_RW = np.linalg.inv(T_WR[i].numpy())
-                    p_WK = sequence.triangulate(predictions_left[i], predictions_right[i],
-                            T_LW,
-                            T_RW)
                     left_points = sequence.to_frame_points(p_WK, T_LW)
                     right_points = sequence.to_frame_points(p_WK, T_RW)
 
@@ -281,7 +222,11 @@ class Runner:
                 self.frame_number += 1
 
     def run(self):
+        if self.flags.write:
+            os.makedirs(self.flags.write, exist_ok=True)
         sequences = self._sequences()
+        import random
+        random.shuffle(sequences)
         for sequence in sequences:
             sequence = Sequence(self.flags, sequence)
             self._play_predictions(sequence)

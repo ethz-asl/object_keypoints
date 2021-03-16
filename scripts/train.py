@@ -43,7 +43,7 @@ class KeypointModule(pl.LightningModule):
         frame, target = batch
         y_hat = self.model(frame)
 
-        loss = F.l1_loss(torch.tanh(y_hat), target, reduction='sum')
+        loss = F.mse_loss(torch.tanh(y_hat), target, reduction='sum') / y_hat.shape[0]
 
         self.log('train_loss', loss)
 
@@ -53,7 +53,7 @@ class KeypointModule(pl.LightningModule):
         frame, target = batch
         y_hat = self.model(frame)
 
-        loss = F.l1_loss(torch.tanh(y_hat), target, reduction='sum')
+        loss = F.mse_loss(torch.tanh(y_hat), target, reduction='sum') / y_hat.shape[0]
 
         self.log('val_loss', loss)
         return loss
