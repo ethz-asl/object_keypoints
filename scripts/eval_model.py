@@ -36,7 +36,7 @@ class Sequence:
         self.scaling_factor = np.array(self.image_size[::-1]) / np.array(self.prediction_size[::-1])
 
     def _loader(self, dataset):
-        return DataLoader(dataset, num_workers=1, batch_size=self.flags.batch_size)
+        return DataLoader(dataset, num_workers=1, batch_size=self.flags.batch_size, pin_memory=True)
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.sequence_path, 'calibration.yaml')
@@ -176,7 +176,7 @@ class Runner:
             N = left_frame.shape[0]
             T_LW = np.linalg.inv(T_WL.numpy())
             T_RW = np.linalg.inv(T_WR.numpy())
-            pipeline_out = self.pipeline(left_frame, T_LW, right_frame, T_WR)
+            pipeline_out = self.pipeline(left_frame.cuda(), T_LW, right_frame.cuda(), T_WR)
 
             left_frame = left_frame.cpu().numpy()
             right_frame = right_frame.cpu().numpy()

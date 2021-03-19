@@ -9,12 +9,12 @@ class InferenceComponent:
     name = "inference"
 
     def __init__(self, model):
-        self.model = KeypointModule.load_from_checkpoint(model).cuda()
+        self.model = torch.jit.load(model).half()
 
     def __call__(self, left_frames, right_frames):
         N = left_frames.shape[0]
-        frames = torch.cat([left_frames, right_frames], 0).cuda()
-        predictions = torch.tanh(self.model(frames)).cpu().numpy()
+        frames = torch.cat([left_frames, right_frames], 0).half()
+        predictions = self.model(frames).cpu().numpy()
         left_pred = predictions[:N]
         right_pred = predictions[N:]
         return left_pred, right_pred
