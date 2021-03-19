@@ -109,7 +109,7 @@ class Runner:
         for item in left:
             try:
                 # Reminder: ^{B}T^{A} = T_BA = lookup_transform(source_frame=A, target_frame=B)
-                T_BL = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='base_link',
+                T_BL = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='panda_link0',
                         source_frame='zedm_left_optical_frame', time=item['message'].header.stamp))
                 item['camera_pose'] = T_BL
                 item['i'] = i # Override index as some frames might have been skipped.
@@ -122,7 +122,7 @@ class Runner:
         i = 0
         for item in right:
             try:
-                T_BR = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='base_link',
+                T_BR = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='panda_link0',
                         source_frame='zedm_right_optical_frame', time=item['message'].header.stamp))
                 item['camera_pose'] = T_BR
                 item['i'] = i

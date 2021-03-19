@@ -9,16 +9,8 @@ import cv2
 import constants
 import yaml
 from skvideo import io as video_io
+from perception.utils import camera_utils, Rate
 hud.set_data_directory(os.path.dirname(hud.__file__))
-
-# Ros imports
-import rospy
-import tf2_ros
-from perception.utils import ros as ros_utils
-from perception.utils import camera_utils
-from geometry_msgs import msg as geometry_msgs
-from scipy.spatial.transform import Rotation
-
 
 def read_args():
     parser = argparse.ArgumentParser()
@@ -35,8 +27,6 @@ class ViewModel:
         self._load_video(directory)
         self._load_metadata(directory)
         self.current_frame = 0
-
-        self.tf_publisher = tf2_ros.TransformBroadcaster()
 
     def _read_keypoints(self, base_dir):
         filepath = os.path.join(base_dir, KEYPOINT_FILENAME)
@@ -90,13 +80,6 @@ class ViewModel:
             p_LK = T_LW @ p_WK
             p_RK = T_RW @ p_WK
 
-            now = rospy.Time.now()
-            msg_l = ros_utils.transform_to_message(T_WL, 'base_link', 'camera_left', now)
-            msg_r = ros_utils.transform_to_message(T_WR, 'base_link', 'camera_right', now)
-
-            self.tf_publisher.sendTransform(msg_l)
-            self.tf_publisher.sendTransform(msg_r)
-
             p_l = self.K @ np.eye(3, 4) @ T_LW @ p_WK
             p_r = self.Kp @ np.eye(3, 4) @ T_RW @ p_WK
             p_l = p_l / p_l[2]
@@ -104,8 +87,6 @@ class ViewModel:
 
             T_WK = np.eye(4)
             T_WK[:, 3] = p_WK
-            msg_k = ros_utils.transform_to_message(T_WK, 'base_link', 'keypoint', now)
-            self.tf_publisher.sendTransform(msg_k)
 
             left_frame_points.append(
                     hud.utils.to_normalized_device_coordinates(
@@ -134,10 +115,6 @@ class PointVisualizer:
         self.done = False
         self.window = hud.AppWindow("Keypoints", 1280, 360)
         self._create_views()
-        self._init_ros()
-
-    def _init_ros(self):
-        rospy.init_node('point_vis')
 
     def _create_views(self):
         self.left_image_pane = hud.ImagePane()
@@ -163,6 +140,7 @@ class PointVisualizer:
             self.done = True
 
     def run(self):
+        rate = Rate(30)
         directories = os.listdir(self.flags.base_dir)
         for directory in directories:
             try:
@@ -175,7 +153,7 @@ class PointVisualizer:
                     if not self.window.update() or self.done:
                         return
                     self.window.poll_events()
-                    time.sleep(0.01)
+                    rate.sleep()
             finally:
                 view_model.close()
 

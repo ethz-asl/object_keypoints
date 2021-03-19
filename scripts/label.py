@@ -14,13 +14,6 @@ from perception.utils import linalg
 from constants import *
 from perception.utils import camera_utils
 
-# Ros imports
-import rospy
-import tf2_ros
-from perception.utils import ros as ros_utils
-from geometry_msgs import msg as geometry_msgs
-from scipy.spatial.transform import Rotation
-
 hud.set_data_directory(os.path.dirname(hud.__file__))
 
 def read_args():
@@ -46,18 +39,6 @@ def _project(p_WK, T_WC, K):
     p_CK /= p_CK[3]
     point = K @ p_CK[:3]
     return point / point[2]
-
-def to_point_message(point):
-    if point.shape[0] == 4:
-        # Normalize.
-        point /= point[3]
-    msg = geometry_msgs.PointStamped()
-    msg.header.frame_id = 'world'
-    msg.header.stamp = rospy.Time.now()
-    msg.point.x = point[0]
-    msg.point.y = point[1]
-    msg.point.z = point[2]
-    return msg
 
 class PointCommand:
     def __init__(self, point, rect):
@@ -112,12 +93,6 @@ class LabelingApp:
         self._create_views()
         self.hdf = None
         self.done = False
-        self._init_ros()
-
-    def _init_ros(self):
-        self.node = rospy.init_node("stereo_label")
-        self.tf_publisher = tf2_ros.TransformBroadcaster()
-        self.point_publisher = rospy.Publisher('keypoint', geometry_msgs.PointStamped, queue_size=1)
 
     def _create_views(self):
         self.window = hud.AppWindow("StereoLabeler", 1920, 540)
@@ -182,17 +157,12 @@ class LabelingApp:
         self._load_camera_params()
 
         self.current_dir = path
-        if self.left_video is not None:
-            self.left_video.close()
-            self.right_video.close()
         self.left_frame_index, self.right_frame_index = self._find_furthest()
 
-        self.left_video = video_io.vreader(os.path.join(path, 'left.mp4'))
-        self.right_video = video_io.vreader(os.path.join(path, 'right.mp4'))
-        for _, left_frame in zip(range(self.left_frame_index + 1), self.left_video):
-            continue
-        for _, right_frame in zip(range(self.right_frame_index + 1), self.right_video):
-            continue
+        self.left_video = video_io.vread(os.path.join(path, 'left.mp4'))
+        self.right_video = video_io.vread(os.path.join(path, 'right.mp4'))
+        left_frame = self.left_video[self.left_frame_index]
+        right_frame = self.right_video[self.right_frame_index]
         left_frame = cv2.undistort(left_frame, self.K, self.D)
         right_frame = cv2.undistort(right_frame, self.Kp, self.Dp)
         self.left_image_pane.set_texture(left_frame)
@@ -204,6 +174,8 @@ class LabelingApp:
 
 
     def _load_points(self, keypoint_file):
+        #TODO: Either use backprojected keypoints or store which frame was used to select keypoints.
+        # This wasn't a problem before swapping the frame was added.
         with open(keypoint_file, 'rt') as f:
             keypoints = json.loads(f.read())
             world_points = keypoints['3d_points']
@@ -224,18 +196,6 @@ class LabelingApp:
                 self.commands.append(AddRightPointCommand(right_hud, IMAGE_RECT))
                 self.left_keypoints.append(left_hud)
                 self.right_keypoints.append(right_hud)
-
-                T_WK = np.eye(4)
-                T_WK[:3, 3] = point[:3]
-                T_WK_msg = ros_utils.transform_to_message(T_WK, 'base_link', 'keypoint', rospy.Time.now())
-                self.tf_publisher.sendTransform(T_WK_msg)
-
-                ts = rospy.Time.now()
-                T_WL_msg = ros_utils.transform_to_message(T_WL, 'base_link', 'camera_left', ts)
-                T_WR_msg = ros_utils.transform_to_message(T_WR, 'base_link', 'camera_right', ts)
-                self.tf_publisher.sendTransform(T_WL_msg)
-                self.tf_publisher.sendTransform(T_WR_msg)
-
 
     def _load_camera_params(self):
         calibration_file = self.flags.calibration
@@ -265,6 +225,18 @@ class LabelingApp:
         self.commands.append(command)
         self._save()
 
+    def _swap_left_frame(self):
+        self.left_frame_index = random.randint(0, self.hdf['left/camera_transform'].shape[0]-1)
+        left_frame = self.left_video[self.left_frame_index]
+        left_frame = cv2.undistort(left_frame, self.K, self.D)
+        self.left_image_pane.set_texture(left_frame)
+
+    def _swap_right_frame(self):
+        self.right_frame_index = random.randint(0, self.right_video.shape[0]-1)
+        right_frame = self.right_video[self.right_frame_index]
+        right_frame = cv2.undistort(right_frame, self.Kp, self.Dp)
+        self.right_image_pane.set_texture(right_frame)
+
     def _set_colors(self):
         left_colors = np.zeros((len(self.left_keypoints), 4))
         left_colors[:, :] = np.array([1.0, 0.5, 0.5, 1.0])[None]
@@ -277,6 +249,10 @@ class LabelingApp:
             self.quit()
         elif event.key == 'Z' and event.modifiers & hud.modifiers.CTRL:
             self.undo()
+        elif event.key == 'A':
+            self._swap_left_frame()
+        elif event.key == 'B':
+            self._swap_right_frame()
         elif event.key == '\x00':
             self.next_example()
 
@@ -312,12 +288,6 @@ class LabelingApp:
         T_LR = np.linalg.inv(T_WL) @ T_WR
         T_RL = np.linalg.inv(T_WR) @ T_WL
 
-        ts = rospy.Time.now()
-        T_WL_msg = ros_utils.transform_to_message(T_WL, 'base_link', 'camera_left', ts)
-        T_WR_msg = ros_utils.transform_to_message(T_WR, 'base_link', 'camera_right', ts)
-        self.tf_publisher.sendTransform(T_WL_msg)
-        self.tf_publisher.sendTransform(T_WR_msg)
-
         x = np.array([left_point.x, left_point.y])[:, None]
         xp = np.array([right_point.x, right_point.y])[:, None]
 
@@ -334,13 +304,6 @@ class LabelingApp:
         print('projected_x: ', projected_x.T)
         left_backprojected = hud.Point(projected_x[0], projected_x[1])
         left_backprojected = hud.utils.to_normalized_device_coordinates(left_backprojected, IMAGE_RECT)
-
-        msg = to_point_message(p_WK.ravel())
-        self.point_publisher.publish(msg)
-        T_p = np.eye(4)
-        T_p[:3, 3] = p_WK[:3].ravel()
-        T_p_msg = ros_utils.transform_to_message(T_p, 'base_link', 'keypoint', rospy.Time.now())
-        self.tf_publisher.sendTransform(T_p_msg)
 
         return p_WK, left_backprojected
 
