@@ -14,9 +14,10 @@ import pytorch_lightning as pl
 
 def read_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('data')
     parser.add_argument('--workers', '-w', type=int, default=8, help="How many workers to use in data loader.")
     parser.add_argument('--batch-size', default=8, type=int)
+    parser.add_argument('--train', type=str, required=True, help="Path to training dataset.")
+    parser.add_argument('--val', type=str, required=True, help="Path to validation dataset.")
     parser.add_argument('--gpus', type=int, default=1)
     parser.add_argument('--fp16', action='store_true', help="Use half-precision.")
     parser.add_argument('--pool', default=1000, type=int, help="How many examples to use in shuffle pool")
@@ -73,12 +74,13 @@ class DataModule(pl.LightningDataModule):
     def __init__(self, flags):
         super().__init__()
         datasets = []
-        directories = os.listdir(flags.data)
-        sequences = sorted([os.path.join(flags.data, d) for d in directories])
-        val_sequences = 2
+        train_directories = os.listdir(flags.train)
+        train_sequences = sorted([os.path.join(flags.train, d) for d in train_directories])
+        val_directories = os.listdir(flags.val)
+        val_sequences = sorted([os.path.join(flags.val, d) for d in val_directories])
         self.flags = flags
-        self.train_sequences = sequences[:len(sequences)-val_sequences]
-        self.val_sequences = sequences[len(sequences)-val_sequences:]
+        self.train_sequences = train_sequences
+        self.val_sequences = val_sequences
 
     def setup(self, stage):
         if stage == 'fit':
