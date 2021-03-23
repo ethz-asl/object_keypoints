@@ -1,0 +1,13 @@
+<?xml version="1.0" ?>
+<launch>
+  <!-- Launch state publisher -->
+  <node name="object_keypoints" pkg="object_keypoints" type="run_pipeline.py" output="screen">
+    <param name="left_image_topic" value="/zedm/zed_node/left_raw/image_raw_color" />
+    <param name="right_image_topic" value="/zedm/zed_node/right_raw/image_raw_color" />
+    <param name="left_camera_frame" value="zedm_left_optical_frame" />
+    <param name="right_camera_frame" value="zedm_right_optical_frame" />
+    <param name="load_model" value="$(find object_keypoints)/models/modelv2.pt" />
+    <param name="calibration" value="$(find object_keypoints)/config/calibration.yaml" />
+  </node>
+
+</launch>
