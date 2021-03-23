@@ -5,7 +5,6 @@ import time
 import cv2
 import torch
 import numpy as np
-import yaml
 from torch.utils.data import DataLoader
 from perception.datasets.video import StereoVideoDataset
 from perception.utils import Rate, camera_utils, clustering_utils, linalg
@@ -40,16 +39,12 @@ class Sequence:
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.sequence_path, 'calibration.yaml')
-        with open(calibration_file, 'rt') as f:
-            calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        params = camera_utils.load_calibration_params(calibration_file)
 
-        left = calibration['cam0']
-        self.K = camera_utils.camera_matrix(left['intrinsics'])
-        right = calibration['cam1']
-        self.Kp = camera_utils.camera_matrix(right['intrinsics'])
-
-        self.T_RL = np.array(calibration['cam1']['T_cn_cnm1'])
-        self.image_size = calibration['cam1']['resolution'][::-1]
+        self.K = params['K']
+        self.Kp = params['Kp']
+        self.T_RL = params['T_RL']
+        self.image_size = params['image_size']
 
     def to_frame_points(self, p_WK, T_CW):
         """

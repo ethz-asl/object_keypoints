@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import cv2
-from train import KeypointModule
 from perception.utils import camera_utils, clustering_utils, linalg
 
 
@@ -22,7 +21,7 @@ class InferenceComponent:
 
 class KeypointExtractionComponent:
     name = "keypoints"
-    PROBABILITY_CUTOFF = 0.25
+    PROBABILITY_CUTOFF = 0.1
 
     def __init__(self, K):
         self.K = K

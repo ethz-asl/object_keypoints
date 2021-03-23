@@ -34,5 +34,10 @@ class KeypointClustering:
             weights = probabilities[in_cluster]
             weights /= weights.sum()
             estimates[i, :] = (weights[:, None] * cluster_indices).sum(axis=0)
-        self.past_clusters = estimates
-        return estimates
+        if self.past_clusters is not None:
+            # Smoothing to not have the keypoints completely change in case the
+            # clustering or predction is bad for a couple steps.
+            self.past_clusters = 0.8 * self.past_clusters + 0.2 * estimates
+        else:
+            self.past_clusters = estimates
+        return self.past_clusters
