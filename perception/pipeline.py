@@ -139,7 +139,7 @@ class TriangulationComponent:
             out_points[i, :, :] = self._triangulate(
                 left_keypoints[i], T_LW[i], right_keypoints[i]
             )
-        return out_points
+        return out_points[:, :, :3]
 
 
 class KeypointPipeline:
