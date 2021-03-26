@@ -23,12 +23,13 @@ def load_calibration_params(calibration_file):
     right = calibration['cam1']
     Kp = camera_matrix(right['intrinsics'])
 
-    T_RL = np.array(calibration['cam1']['T_cn_cnm1'])
+    T_LR = np.array(calibration['cam1']['T_cn_cnm1'])
     image_size = calibration['cam1']['resolution'][::-1]
     return {
         'K': K,
         'Kp': Kp,
-        'T_RL': T_RL,
+        'T_LR': T_LR,
+        'T_RL': np.linalg.inv(T_LR),
         'image_size': image_size
     }
 

@@ -115,7 +115,7 @@ class TriangulationComponent:
         # returns: N x 2 image points scaled to the full image size.
         return points * self.scaling_factor
 
-    def _triangulate(self, left_keypoints, T_LW, right_keypoints):
+    def _triangulate(self, left_keypoints, right_keypoints):
         left_keypoints = self._scale_points(left_keypoints)
         right_keypoints = self._scale_points(right_keypoints)
         associations = self._associate(left_keypoints, right_keypoints)
@@ -128,18 +128,16 @@ class TriangulationComponent:
             P1, P2, left_keypoints.T, right_keypoints.T
         ).T  # N x 4
         p_LK = p_LK / p_LK[:, 3:4]
-        p_WK = (np.linalg.inv(T_LW) @ p_LK[:, :, None])[:, :, 0]
-        p_WK /= p_WK[:, 3:4]
-        return p_WK
+        return p_LK
 
-    def __call__(self, left_keypoints, T_LW, right_keypoints, T_RW):
+    def __call__(self, left_keypoints, right_keypoints):
         N = left_keypoints.shape[0]
         out_points = np.zeros((N, 1+self.n_points, 4), dtype=np.float32)
         for i in range(left_keypoints.shape[0]):
             out_points[i, :, :] = self._triangulate(
-                left_keypoints[i], T_LW[i], right_keypoints[i]
+                left_keypoints[i], right_keypoints[i]
             )
-        return out_points[:, :, :3]
+        return out_points
 
 
 class KeypointPipeline:
@@ -152,13 +150,14 @@ class KeypointPipeline:
         self.keypoint_extraction.reset()
         self.triangulation.reset(K, Kp, T_RL, scaling_factor)
 
-    def __call__(self, left, T_LW, right, T_RW):
+    def __call__(self, left, right):
         heatmap_l, heatmap_r = self.inference(left, right)
         keypoints_l, keypoints_r = self.keypoint_extraction(heatmap_l, heatmap_r)
-        out_points = self.triangulation(keypoints_l, T_LW, keypoints_r, T_RW)
+        out_points = self.triangulation(keypoints_l, keypoints_r)
         out = {
             "heatmap_left": heatmap_l,
             "heatmap_right": heatmap_r,
-            "keypoints_world": out_points,
+            "keypoints": out_points,
         }
         return out
+

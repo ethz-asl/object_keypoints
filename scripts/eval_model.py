@@ -43,7 +43,7 @@ class Sequence:
 
         self.K = params['K']
         self.Kp = params['Kp']
-        self.T_RL = params['T_RL']
+        self.T_LR = params['T_LR']
         self.image_size = params['image_size']
 
     def to_frame_points(self, p_WK, T_CW):
@@ -164,14 +164,14 @@ class Runner:
         self.figure.clf()
 
     def _play_predictions(self, sequence):
-        self.pipeline.reset(sequence.K, sequence.Kp, sequence.T_RL, sequence.scaling_factor)
+        self.pipeline.reset(sequence.K, sequence.Kp, sequence.T_LR, sequence.scaling_factor)
 
         rate = Rate(60)
         for i, ((left_frame, l_target, T_WL), (right_frame, r_target, T_WR)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
             N = left_frame.shape[0]
             T_LW = np.linalg.inv(T_WL.numpy())
             T_RW = np.linalg.inv(T_WR.numpy())
-            pipeline_out = self.pipeline(left_frame.cuda(), T_LW, right_frame.cuda(), T_WR)
+            pipeline_out = self.pipeline(left_frame.cuda(), right_frame.cuda())
 
             left_frame = left_frame.cpu().numpy()
             right_frame = right_frame.cpu().numpy()
@@ -193,7 +193,8 @@ class Runner:
                 image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
                 image_right = (0.3 * right_rgb + 0.7 * heatmap_right).astype(np.uint8)
 
-                p_WK = pipeline_out['keypoints_world'][i]
+                p_LK = pipeline_out['keypoints'][i]
+                p_WK = (T_WL.cpu().numpy() @ p_LK[:, :, None])[:, :, 0]
 
                 if self.flags.write:
                     left_points = sequence.project_points(p_WK, T_LW, sequence.K)
