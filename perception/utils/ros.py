@@ -25,3 +25,17 @@ def transform_to_message(T, parent_frame, child_frame, timestamp):
     msg.transform.rotation.z = quat[2]
     msg.transform.rotation.w = quat[3]
     return msg
+
+def transform_to_pose(T, frame, timestamp):
+    msg = geometry_msgs.PoseStamped()
+    msg.header.stamp = timestamp
+    msg.header.frame_id = frame
+    msg.pose.position.x = T[0, 3]
+    msg.pose.position.y = T[1, 3]
+    msg.pose.position.z = T[2, 3]
+    q = Rotation.from_matrix(T[:3, :3]).as_quat()
+    msg.pose.orientation.x = q[0]
+    msg.pose.orientation.y = q[1]
+    msg.pose.orientation.z = q[2]
+    msg.pose.orientation.w = q[3]
+    return msg

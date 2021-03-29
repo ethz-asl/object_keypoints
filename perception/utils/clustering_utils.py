@@ -5,7 +5,7 @@ from sklearn import cluster
 class KeypointClustering:
     def __init__(self, K, bandwidth):
         self.K = K
-        self.clustering = cluster.KMeans(n_clusters=K, n_init=1)
+        self.clustering = cluster.MeanShift(bandwidth=bandwidth, cluster_all=True)
         self.past_clusters = None
 
     def __call__(self, indices, probabilities):
@@ -16,9 +16,6 @@ class KeypointClustering:
         returns: C x D keypoint estimates. C is the amount of clusters found.
         """
         D = indices.shape[1]
-        if self.past_clusters is not None:
-            self.clustering.set_params(init=self.past_clusters)
-
         if indices.shape[0] < self.K:
             # We have less points than clusters. Just return the points.
             out = np.zeros((self.K, D), dtype=indices.dtype)
@@ -27,17 +24,19 @@ class KeypointClustering:
 
         self.clustering.fit(indices)
 
-        estimates = self.clustering.cluster_centers_
-        for i in range(estimates.shape[0]):
+        estimates = np.zeros((self.K, D))
+        centers = self.clustering.cluster_centers_
+        if centers.shape[0] < self.K:
+            print(f"Found only {centers.shape[0]} centers.")
+        K = min(self.K, centers.shape[0])
+        for i in range(K):
             in_cluster = self.clustering.labels_ == i
             cluster_indices = indices[in_cluster]
-            weights = probabilities[in_cluster]
-            weights /= weights.sum()
-            estimates[i, :] = (weights[:, None] * cluster_indices).sum(axis=0)
-        if self.past_clusters is not None:
-            # Smoothing to not have the keypoints completely change in case the
-            # clustering or predction is bad for a couple steps.
-            self.past_clusters = 0.8 * self.past_clusters + 0.2 * estimates
-        else:
-            self.past_clusters = estimates
+            # weights = probabilities[in_cluster]
+            # weights /= weights.sum()
+            # estimates[i, :] = (weights[:, None] * cluster_indices).sum(axis=0)
+            estimates[i, :] = centers[i]
+
+        self.past_clusters = estimates
+
         return self.past_clusters

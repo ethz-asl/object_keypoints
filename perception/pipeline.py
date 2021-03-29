@@ -31,7 +31,7 @@ class InferenceComponent:
 
 class KeypointExtractionComponent:
     name = "keypoints"
-    PROBABILITY_CUTOFF = 0.1
+    PROBABILITY_CUTOFF = 0.25
 
     def __init__(self, K):
         self.K = K
@@ -178,6 +178,7 @@ class PnPComponent:
             T = self.prev_pose
         else:
             center = keypoints_2d[0]
+            keypoints_2d[1:] = sorted(keypoints_2d[1:], key=lambda x: x[1])
             first = keypoints_2d[1]
             def sorting_function(v1):
                 def inner(point):
@@ -185,10 +186,10 @@ class PnPComponent:
                     return np.arctan2(v2[1], v2[0]) - np.arctan2(v1[1], v1[0])
                 return inner
             # Sort counter clockwise from direction defined between center and first keypoints.
-            # keypoints_2d[2:] = sorted(keypoints_2d[2:], key=sorting_function(first - center))
+            keypoints_2d[2:] = sorted(keypoints_2d[2:], key=sorting_function(first - center))
             n_points = min(keypoints_2d.shape[0], self.points_3d.shape[0])
 
-            success, rvec, tvec = cv2.solvePnP(self.points_3d[:n_points], keypoints_2d[:n_points], self.K, self.D, flags=cv2.SOLVEPNP_EPNP)
+            success, rvec, tvec, inliers = cv2.solvePnPRansac(self.points_3d[:n_points], keypoints_2d[:n_points], self.K, self.D, flags=cv2.SOLVEPNP_EPNP)
             if not success:
                 print("failed to solve pnp")
             T = np.eye(4)
@@ -243,18 +244,12 @@ class PnPKeypointPipeline:
         keypoints_l, keypoints_r = self.keypoint_extraction(heatmap_l, heatmap_r)
         T_L_O, p_L = self.pnp_l(keypoints_l)
         T_R_O, p_R = self.pnp_r(keypoints_r)
-        averaged_points = np.zeros(p_L.shape)
-        ones = np.ones((p_L.shape[1], 1))
-        for i in range(p_L.shape[0]):
-            current_R = np.concatenate([p_R[i, :, :], ones], axis=1)
-            p2_L = (self.T_LR @ current_R[:, :, None])[:, :, 0]
-            p2_L = (p2_L / p2_L[:, 3:4])[:, :3]
-            averaged_points[i] = (p2_L + p_L[i]) * 0.5
-            print("Discrepancy left-right: ", np.abs(p_L - p2_L))
         out = {
             "heatmap_left": heatmap_l,
             "heatmap_right": heatmap_r,
-            "keypoints": averaged_points,
+            "keypoints_left": keypoints_l,
+            "keypoints_right": keypoints_r,
+            "keypoints": p_L,
             "pose": T_L_O
         }
         return out
