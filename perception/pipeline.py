@@ -7,13 +7,23 @@ from perception.utils import camera_utils, clustering_utils, linalg
 class InferenceComponent:
     name = "inference"
 
-    def __init__(self, model):
-        self.model = torch.jit.load(model).half()
+    def __init__(self, model, cuda):
+        self.cuda = cuda
+        model = torch.jit.load(model)
+        if cuda:
+            self.model = model.half().cuda()
+        else:
+            self.model = model.cpu().float()
 
     def __call__(self, left_frames, right_frames):
         N = left_frames.shape[0]
-        frames = torch.cat([left_frames, right_frames], 0).half()
+        if self.cuda:
+            frames = torch.cat([left_frames, right_frames], 0).half()
+            frames = frames.cuda()
+        else:
+            frames = torch.cat([left_frames, right_frames], 0)
         predictions = self.model(frames).cpu().numpy()
+
         left_pred = predictions[:N]
         right_pred = predictions[N:]
         return left_pred, right_pred
@@ -30,8 +40,8 @@ class KeypointExtractionComponent:
         self.indices = np.zeros((*prediction_size, 2), dtype=np.float32)
         for y in range(prediction_size[0]):
             for x in range(prediction_size[1]):
-                self.indices[y, x, 0] = np.float32(x) + 1.0
-                self.indices[y, x, 1] = np.float32(y) + 1.0
+                self.indices[y, x, 0] = np.float32(x) + 0.5
+                self.indices[y, x, 1] = np.float32(y) + 0.5
 
     def reset(self):
         self.clustering_left = clustering_utils.KeypointClustering(self.K, 2.0)
@@ -139,14 +149,66 @@ class TriangulationComponent:
             )
         return out_points
 
+class PnPComponent:
+    def __init__(self, points_3d):
+        self.points_3d = points_3d
+        self.ones = np.ones((self.points_3d.shape[0], 1))
+        self.K = None
+        self.D = None
+        self.prev_pose = np.eye(4)
+
+    def reset(self, K, D, scaling_factor):
+        self.K = camera_utils.scale_camera_matrix(K, 1.0 / scaling_factor)
+        self.D = D
+
+    def __call__(self, keypoints_2d):
+        """
+        keypoints_2d: K x 2
+        """
+        N = keypoints_2d.shape[0]
+        points = np.zeros((N, self.points_3d.shape[0], 3))
+        poses = np.zeros((N, 4, 4))
+        for i in range(N):
+            poses[i], points[i] = self._compute_keypoints(keypoints_2d[i])
+        return poses, points
+
+    def _compute_keypoints(self, keypoints_2d):
+        if keypoints_2d.shape[0] < 4:
+            rospy.logwarn(f"Only found {keypoints_2d.shape[0]} keypoints.")
+            T = self.prev_pose
+        else:
+            center = keypoints_2d[0]
+            first = keypoints_2d[1]
+            def sorting_function(v1):
+                def inner(point):
+                    v2 = point - center
+                    return np.arctan2(v2[1], v2[0]) - np.arctan2(v1[1], v1[0])
+                return inner
+            # Sort counter clockwise from direction defined between center and first keypoints.
+            # keypoints_2d[2:] = sorted(keypoints_2d[2:], key=sorting_function(first - center))
+            n_points = min(keypoints_2d.shape[0], self.points_3d.shape[0])
+
+            success, rvec, tvec = cv2.solvePnP(self.points_3d[:n_points], keypoints_2d[:n_points], self.K, self.D, flags=cv2.SOLVEPNP_EPNP)
+            if not success:
+                print("failed to solve pnp")
+            T = np.eye(4)
+            R, _ = cv2.Rodrigues(rvec)
+            T[:3, :3] = R
+            T[:3, 3] = tvec[:, 0]
+            self.prev_pose = T
+
+        points_3d = np.concatenate([self.points_3d, self.ones], axis=1)
+        points_3d = (T @ points_3d[:, :, None])[:, :, 0]
+        points_3d = (points_3d / points_3d[:, 3:4])[:, :3]
+        return T, points_3d
 
 class KeypointPipeline:
-    def __init__(self, model, n_keypoints):
-        self.inference = InferenceComponent(model)
+    def __init__(self, model, n_keypoints, cuda):
+        self.inference = InferenceComponent(model, cuda)
         self.keypoint_extraction = KeypointExtractionComponent(n_keypoints)
         self.triangulation = TriangulationComponent(n_keypoints)
 
-    def reset(self, K, Kp, T_RL, scaling_factor):
+    def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
         self.keypoint_extraction.reset()
         self.triangulation.reset(K, Kp, T_RL, scaling_factor)
 
@@ -160,4 +222,41 @@ class KeypointPipeline:
             "keypoints": out_points,
         }
         return out
+
+class PnPKeypointPipeline:
+    def __init__(self, model, keypoints, cuda):
+        self.inference = InferenceComponent(model, cuda)
+        # Cluster all but center point.
+        self.keypoint_extraction = KeypointExtractionComponent(keypoints.shape[0] - 1)
+        self.pnp_l = PnPComponent(keypoints)
+        self.pnp_r = PnPComponent(keypoints)
+
+    def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
+        self.keypoint_extraction.reset()
+        self.pnp_l.reset(K, D, scaling_factor)
+        self.pnp_r.reset(Kp, Dp, scaling_factor)
+        self.T_RL = T_RL
+        self.T_LR = np.linalg.inv(T_RL)
+
+    def __call__(self, left, right):
+        heatmap_l, heatmap_r = self.inference(left, right)
+        keypoints_l, keypoints_r = self.keypoint_extraction(heatmap_l, heatmap_r)
+        T_L_O, p_L = self.pnp_l(keypoints_l)
+        T_R_O, p_R = self.pnp_r(keypoints_r)
+        averaged_points = np.zeros(p_L.shape)
+        ones = np.ones((p_L.shape[1], 1))
+        for i in range(p_L.shape[0]):
+            current_R = np.concatenate([p_R[i, :, :], ones], axis=1)
+            p2_L = (self.T_LR @ current_R[:, :, None])[:, :, 0]
+            p2_L = (p2_L / p2_L[:, 3:4])[:, :3]
+            averaged_points[i] = (p2_L + p_L[i]) * 0.5
+            print("Discrepancy left-right: ", np.abs(p_L - p2_L))
+        out = {
+            "heatmap_left": heatmap_l,
+            "heatmap_right": heatmap_r,
+            "keypoints": averaged_points,
+            "pose": T_L_O
+        }
+        return out
+
 

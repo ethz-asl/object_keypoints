@@ -22,14 +22,30 @@ def load_calibration_params(calibration_file):
     K = camera_matrix(left['intrinsics'])
     right = calibration['cam1']
     Kp = camera_matrix(right['intrinsics'])
+    D = np.array(calibration['cam0']['distortion_coeffs'])
+    Dp = np.array(calibration['cam1']['distortion_coeffs'])
 
     T_LR = np.array(calibration['cam1']['T_cn_cnm1'])
     image_size = calibration['cam1']['resolution'][::-1]
     return {
         'K': K,
         'Kp': Kp,
+        'D': D,
+        'Dp': Dp,
         'T_LR': T_LR,
         'T_RL': np.linalg.inv(T_LR),
         'image_size': image_size
     }
 
+
+def scale_camera_matrix(K, scaling_factor):
+    """
+    K: 3 x 3 camera matrix
+    scaling_factor: array of length 2, x and y scaling factor.
+    """
+    out = K.copy()
+    out[0, 0] = K[0, 0] * scaling_factor[0]
+    out[1, 1] = K[1, 1] * scaling_factor[1]
+    out[0, 2] = K[0, 2] * scaling_factor[0]
+    out[1, 2] = K[1, 2] * scaling_factor[1]
+    return out
