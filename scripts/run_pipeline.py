@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import json
+
 import rospy
 import message_filters
 import torch
@@ -35,13 +37,13 @@ class ObjectKeypointPipeline:
         self.bridge = CvBridge()
         self.input_size = (360, 640)
         model = rospy.get_param('object_keypoints_ros/load_model', "/home/ken/Hack/catkin_ws/src/object_keypoints/model/modelv2.pt")
-        self.pipeline = pipeline.KeypointPipeline(model, 3)
+        self.pipeline = pipeline.PnPKeypointPipeline(model, self._read_keypoints(), False)
         self.rgb_mean = torch.tensor([0.5, 0.5, 0.5], requires_grad=False, dtype=torch.float32)[:, None, None]
         self.rgb_std = torch.tensor([0.25, 0.25, 0.25], requires_grad=False, dtype=torch.float32)[:, None, None]
         self._read_calibration()
         self.prediction_size = (90, 160)
         scaling_factor = np.array(self.image_size) / np.array(self.prediction_size)
-        self.pipeline.reset(self.K, self.Kp, self.T_RL, scaling_factor)
+        self.pipeline.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL, scaling_factor)
 
         # TF
         self.tf_buffer = tf2_ros.Buffer()
@@ -61,8 +63,15 @@ class ObjectKeypointPipeline:
         params = camera_utils.load_calibration_params(path)
         self.K = params['K']
         self.Kp = params['Kp']
+        self.D = params['D']
+        self.Dp = params['Dp']
         self.T_RL = params['T_RL']
         self.image_size = params['image_size']
+
+    def _read_keypoints(self):
+        path = rospy.get_param('object_keypoints_ros/keypoints')
+        with open(path, 'rt') as f:
+            return np.array(json.loads(f.read())['3d_points'])
 
     def _right_image_callback(self, image):
         img = self.bridge.imgmsg_to_cv2(image, 'rgb8')
@@ -102,7 +111,7 @@ class ObjectKeypointPipeline:
         if self.left_image is not None and self.right_image is not None:
             left_image = self._preprocess_image(self.left_image)
             right_image = self._preprocess_image(self.right_image)
-            out = self.pipeline(left_image.cuda(), right_image.cuda())
+            out = self.pipeline(left_image, right_image)
             self.left_image = None
             self.right_image = None
             self._publish_keypoints(out['keypoints'][0], self.left_image_ts)
