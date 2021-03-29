@@ -7,5 +7,6 @@
     <param name="load_model" value="$(find object_keypoints_ros)/models/modelv2.pt" />
     <param name="calibration" value="$(find object_keypoints_ros)/config/calibration.yaml" />
     <param name="keypoints" value="$(find object_keypoints_ros)/config/keypoints.json" />
+    <param name="pnp" value="false" type="bool" />
   </node>
 </launch>

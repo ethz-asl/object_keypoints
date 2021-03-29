@@ -43,7 +43,10 @@ class ObjectKeypointPipeline:
         self.bridge = CvBridge()
         self.input_size = (360, 640)
         model = rospy.get_param('object_keypoints_ros/load_model', "/home/ken/Hack/catkin_ws/src/object_keypoints/model/modelv2.pt")
-        self.pipeline = pipeline.PnPKeypointPipeline(model, self._read_keypoints(), False)
+        if rospy.get_param('object_keypoints_ros/pnp', False):
+            self.pipeline = pipeline.PnPKeypointPipeline(model, self._read_keypoints(), False)
+        else:
+            self.pipeline = pipeline.KeypointPipeline(model, self._read_keypoints(), False)
         self.rgb_mean = torch.tensor([0.5, 0.5, 0.5], requires_grad=False, dtype=torch.float32)[:, None, None]
         self.rgb_std = torch.tensor([0.25, 0.25, 0.25], requires_grad=False, dtype=torch.float32)[:, None, None]
         self._read_calibration()
