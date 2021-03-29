@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import cv2
 from perception.utils import camera_utils, clustering_utils, linalg
+from scipy.spatial.transform import Rotation
 
 
 class InferenceComponent:
@@ -44,8 +45,8 @@ class KeypointExtractionComponent:
                 self.indices[y, x, 1] = np.float32(y) + 0.5
 
     def reset(self):
-        self.clustering_left = clustering_utils.KeypointClustering(self.K, 2.0)
-        self.clustering_right = clustering_utils.KeypointClustering(self.K, 2.0)
+        self.clustering_left = clustering_utils.KeypointClustering(self.K, 1.25)
+        self.clustering_right = clustering_utils.KeypointClustering(self.K, 1.25)
 
     def _to_probabilities(self, prediction):
         return (prediction + 1.0) * 0.5
@@ -96,8 +97,8 @@ class TriangulationComponent:
         self.F = None
 
     def reset(self, K, Kp, T_RL, scaling_factor):
-        self.K = K
-        self.Kp = Kp
+        self.K = camera_utils.scale_camera_matrix(K, 1.0 / scaling_factor)
+        self.Kp = camera_utils.scale_camera_matrix(Kp, 1.0 / scaling_factor)
         self.T_RL = T_RL
         R = self.T_RL[:3, :3]
         t = self.T_RL[:3, 3]
@@ -120,14 +121,7 @@ class TriangulationComponent:
                 distances[i, j] = np.abs(v2.T @ self.F @ v1)
         return distances.argmin(axis=1)
 
-    def _scale_points(self, points):
-        # points: N x 2 image points on the prediction heatmap.
-        # returns: N x 2 image points scaled to the full image size.
-        return points * self.scaling_factor
-
     def _triangulate(self, left_keypoints, right_keypoints):
-        left_keypoints = self._scale_points(left_keypoints)
-        right_keypoints = self._scale_points(right_keypoints)
         associations = self._associate(left_keypoints, right_keypoints)
         # Permute keypoints into the same order as left.
         right_keypoints = right_keypoints[associations]
@@ -142,7 +136,7 @@ class TriangulationComponent:
 
     def __call__(self, left_keypoints, right_keypoints):
         N = left_keypoints.shape[0]
-        out_points = np.zeros((N, 1+self.n_points, 4), dtype=np.float32)
+        out_points = np.zeros((N, self.n_points, 4), dtype=np.float32)
         for i in range(left_keypoints.shape[0]):
             out_points[i, :, :] = self._triangulate(
                 left_keypoints[i], right_keypoints[i]
@@ -203,11 +197,30 @@ class PnPComponent:
         points_3d = (points_3d / points_3d[:, 3:4])[:, :3]
         return T, points_3d
 
+class PoseSolveComponent:
+    def __init__(self, points_3d):
+        self.points_3d = points_3d
+
+    def __call__(self, keypoints):
+        keypoints = keypoints[:, :, :3]
+        T = np.zeros((keypoints.shape[0], 4, 4))
+        for i in range(keypoints.shape[0]):
+            p_center = keypoints[i, 0]
+            gt_center = self.points_3d[0]
+            translation = p_center - gt_center
+            points_3d = self.points_3d + translation
+            T[i, :3, 3] = translation
+            to_align = (keypoints[i] - translation)[1:]
+            rotation, _ = Rotation.align_vectors(to_align, points_3d[1:])
+            T[i, :3, :3] = rotation.as_matrix()
+        return T
+
 class KeypointPipeline:
-    def __init__(self, model, n_keypoints, cuda):
+    def __init__(self, model, points_3d, cuda):
         self.inference = InferenceComponent(model, cuda)
-        self.keypoint_extraction = KeypointExtractionComponent(n_keypoints)
-        self.triangulation = TriangulationComponent(n_keypoints)
+        self.keypoint_extraction = KeypointExtractionComponent(points_3d.shape[0]-1)
+        self.triangulation = TriangulationComponent(points_3d.shape[0])
+        self.pose_solve = PoseSolveComponent(points_3d)
 
     def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
         self.keypoint_extraction.reset()
@@ -220,7 +233,10 @@ class KeypointPipeline:
         out = {
             "heatmap_left": heatmap_l,
             "heatmap_right": heatmap_r,
+            "keypoints_left": keypoints_l,
+            "keypoints_right": keypoints_r,
             "keypoints": out_points,
+            "pose": self.pose_solve(out_points)
         }
         return out
 
