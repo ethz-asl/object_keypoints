@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
+
+# To find catkin python3 build of tf2_py
+import sys
+sys.path.insert(0, '/home/smb/catkin_ws/devel/lib/python3/dist-packages')
 import json
 
 import rospy
 import message_filters
 import torch
 import numpy as np
+import cv2
 import tf2_ros
 from cv_bridge import CvBridge
-from geometry_msgs.msg import PointStamped
+from scipy.spatial.transform import Rotation
+from geometry_msgs.msg import PointStamped, PoseStamped
 from perception.utils import ros as ros_utils
 from sensor_msgs.msg import Image
 from perception import pipeline
@@ -51,12 +57,13 @@ class ObjectKeypointPipeline:
 
         # Publishers
         self.center_point_publisher = rospy.Publisher("object_keypoints_ros/center", PointStamped, queue_size=1)
-        self.point0_pub = rospy.Publisher("object_keypoints/0", PointStamped, queue_size=1)
-        self.point1_pub = rospy.Publisher("object_keypoints/1", PointStamped, queue_size=1)
-        self.point2_pub = rospy.Publisher("object_keypoints/2", PointStamped, queue_size=1)
-        self.point3_pub = rospy.Publisher("object_keypoints/3", PointStamped, queue_size=1)
-        self.left_heatmap_pub = rospy.Publisher("object_keypoints/heatmap_left", Image, queue_size=1)
-        self.right_heatmap_pub = rospy.Publisher("object_keypoints/heatmap_right", Image, queue_size=1)
+        self.point0_pub = rospy.Publisher("object_keypoints_ros/0", PointStamped, queue_size=1)
+        self.point1_pub = rospy.Publisher("object_keypoints_ros/1", PointStamped, queue_size=1)
+        self.point2_pub = rospy.Publisher("object_keypoints_ros/2", PointStamped, queue_size=1)
+        self.point3_pub = rospy.Publisher("object_keypoints_ros/3", PointStamped, queue_size=1)
+        self.left_heatmap_pub = rospy.Publisher("object_keypoints_ros/heatmap_left", Image, queue_size=1)
+        self.right_heatmap_pub = rospy.Publisher("object_keypoints_ros/heatmap_right", Image, queue_size=1)
+        self.pose_pub = rospy.Publisher("object_keypoints_ros/pose", PoseStamped, queue_size=1)
 
     def _read_calibration(self):
         path = rospy.get_param('object_keypoints_ros/calibration')
@@ -96,14 +103,26 @@ class ObjectKeypointPipeline:
             msg = _to_msg(keypoints[i], rospy.Time(0), self.left_camera_frame)
             getattr(self, f'point{i}_pub').publish(msg)
 
-    def _publish_heatmaps(self, left, right):
+    def _publish_pose(self, T, time):
+        msg = ros_utils.transform_to_pose(T, self.left_camera_frame, time)
+        self.pose_pub.publish(msg)
+
+    def _publish_heatmaps(self, left, right, left_keypoints, right_keypoints):
         left = ((left + 1.0) * 0.5).sum(axis=0)
         right = ((right + 1.0) * 0.5).sum(axis=0)
         left = np.clip(cm.inferno(left) * 255.0, 0, 255.0).astype(np.uint8)
         right = np.clip(cm.inferno(right) * 255.0, 0, 255.0).astype(np.uint8)
+
+        for kp in left_keypoints:
+            kp = kp.round().astype(int)
+            left = cv2.circle(left, (kp[0], kp[1]), radius=2, color=(0, 255, 0), thickness=-1)
         left_msg = self.bridge.cv2_to_imgmsg(left[:, :, :3], encoding='passthrough')
-        right_msg = self.bridge.cv2_to_imgmsg(right[:, :, :3], encoding='passthrough')
         self.left_heatmap_pub.publish(left_msg)
+
+        for kp in right_keypoints:
+            kp = kp.round().astype(int)
+            right = cv2.circle(right, (kp[0], kp[1]), radius=1, color=(0, 255, 0, 100), thickness=-1)
+        right_msg = self.bridge.cv2_to_imgmsg(right[:, :, :3], encoding='passthrough')
         self.right_heatmap_pub.publish(right_msg)
 
     def step(self):
@@ -115,7 +134,8 @@ class ObjectKeypointPipeline:
             self.left_image = None
             self.right_image = None
             self._publish_keypoints(out['keypoints'][0], self.left_image_ts)
-            self._publish_heatmaps(out['heatmap_left'][0], out['heatmap_right'][0])
+            self._publish_pose(out['pose'][0], self.left_image_ts)
+            self._publish_heatmaps(out['heatmap_left'][0], out['heatmap_right'][0], out['keypoints_left'][0], out['keypoints_right'][0])
 
 if __name__ == "__main__":
     with torch.no_grad():
