@@ -19,6 +19,8 @@ from sensor_msgs.msg import Image
 from perception import pipeline
 from perception.utils import camera_utils
 from matplotlib import cm
+from vision_msgs.msg import BoundingBox3D
+from . import utils
 
 def _to_msg(keypoint, time, frame):
     msg = PointStamped()
@@ -54,6 +56,8 @@ class ObjectKeypointPipeline:
         scaling_factor = np.array(self.image_size) / np.array(self.prediction_size)
         self.pipeline.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL, scaling_factor)
 
+        self._compute_bbox_dimensions()
+
         # TF
         self.tf_buffer = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -67,6 +71,11 @@ class ObjectKeypointPipeline:
         self.left_heatmap_pub = rospy.Publisher("object_keypoints_ros/heatmap_left", Image, queue_size=1)
         self.right_heatmap_pub = rospy.Publisher("object_keypoints_ros/heatmap_right", Image, queue_size=1)
         self.pose_pub = rospy.Publisher("object_keypoints_ros/pose", PoseStamped, queue_size=1)
+        # Only used if an object mesh is set.
+        if self.bbox_size is not None:
+            self.bbox_pub = rospy.Publisher("object_keypoints_ros/bbox", BoundingBox3D, queue_size=1)
+        else:
+            self.bbox_pub = None
 
     def _read_calibration(self):
         path = rospy.get_param('object_keypoints_ros/calibration')
@@ -82,6 +91,15 @@ class ObjectKeypointPipeline:
         path = rospy.get_param('object_keypoints_ros/keypoints')
         with open(path, 'rt') as f:
             return np.array(json.loads(f.read())['3d_points'])
+
+    def _compute_bbox_dimensions(self):
+        mesh_file = rospy.get_param('object_keypoints_ros/object_mesh', None)
+        if mesh_file is not None:
+            bounding_box = utils.compute_bounding_box(mesh_file)
+            # Size is in both directions, surrounding the object from the object center.
+            self.bbox_size = (bounding_box.max(axis=0) - bounding_box.min(axis=0)) * 0.5
+        else:
+            self.bbox_size = None
 
     def _right_image_callback(self, image):
         img = self.bridge.imgmsg_to_cv2(image, 'rgb8')
@@ -106,9 +124,11 @@ class ObjectKeypointPipeline:
             msg = _to_msg(keypoints[i], rospy.Time(0), self.left_camera_frame)
             getattr(self, f'point{i}_pub').publish(msg)
 
-    def _publish_pose(self, T, time):
-        msg = ros_utils.transform_to_pose(T, self.left_camera_frame, rospy.Time(0))
-        self.pose_pub.publish(msg)
+    def _publish_pose(self, pose_msg, time):
+        pose_msg = ros_utils.transform_to_pose(T, self.left_camera_frame, rospy.Time(0))
+        self.pose_pub.publish(pose_msg)
+
+        self._publish_bounding_box(pose_msg)
 
     def _publish_heatmaps(self, left, right, left_keypoints, right_keypoints):
         left = ((left + 1.0) * 0.5).sum(axis=0)
@@ -127,6 +147,15 @@ class ObjectKeypointPipeline:
             right = cv2.circle(right, (kp[0], kp[1]), radius=1, color=(0, 255, 0, 100), thickness=-1)
         right_msg = self.bridge.cv2_to_imgmsg(right[:, :, :3], encoding='passthrough')
         self.right_heatmap_pub.publish(right_msg)
+
+    def _publish_bounding_box(self, T, pose_msg):
+        if self.bbox_size is not None:
+            msg = BoundingBox3D()
+            msg.pose = pose_msg.pose
+            msg.size.x = self.bbox_size[0]
+            msg.size.y = self.bbox_size[1]
+            msg.size.z = self.bbox_size[2]
+            self.bbox_pub.publish(msg)
 
     def step(self):
         I = torch.eye(4)[None]
