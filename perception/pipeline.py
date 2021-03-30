@@ -200,18 +200,22 @@ class PnPComponent:
 class PoseSolveComponent:
     def __init__(self, points_3d):
         self.points_3d = points_3d
+        self.points_3d[1:] = sorted(self.points_3d[:1], key=lambda v: v[2])
 
     def __call__(self, keypoints):
         keypoints = keypoints[:, :, :3]
         T = np.zeros((keypoints.shape[0], 4, 4))
         for i in range(keypoints.shape[0]):
-            p_center = keypoints[i, 0]
-            gt_center = self.points_3d[0]
+            object_keypoints = keypoints[i]
+            p_center = object_keypoints.mean(axis=0)
+            gt_center = self.points_3d.mean(axis=0)
             translation = p_center - gt_center
-            points_3d = self.points_3d + translation
             T[i, :3, 3] = translation
-            to_align = (keypoints[i] - translation)[1:]
-            rotation, _ = Rotation.align_vectors(to_align, points_3d[1:])
+            # Sort object keypoints along z-axis, this should make the detections
+            # more consistent across time steps.
+            object_keypoints = sorted(object_keypoints, key=lambda v: v[2])
+            to_align = (object_keypoints - translation)
+            rotation, _ = Rotation.align_vectors(to_align, self.points_3d)
             T[i, :3, :3] = rotation.as_matrix()
         return T
 
