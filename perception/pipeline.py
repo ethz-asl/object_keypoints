@@ -126,10 +126,10 @@ class TriangulationComponent:
         # Permute keypoints into the same order as left.
         right_keypoints = right_keypoints[associations]
 
-        P1 = camera_utils.projection_matrix(self.K, np.eye(4))
-        P2 = self.Kp @ np.eye(3, 4) @ self.T_RL
+        P1 = (camera_utils.projection_matrix(self.K, np.eye(4))).astype(np.float32)
+        P2 = (self.Kp @ np.eye(3, 4) @ self.T_RL).astype(np.float32)
         p_LK = cv2.triangulatePoints(
-            P1, P2, left_keypoints.T, right_keypoints.T
+            P1, P2, left_keypoints.T.astype(np.float32), right_keypoints.T.astype(np.float32)
         ).T  # N x 4
         p_LK = p_LK / p_LK[:, 3:4]
         return p_LK
