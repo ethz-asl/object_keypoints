@@ -3,7 +3,7 @@
   <node name="object_keypoints_ros" pkg="object_keypoints_ros" type="run_pipeline.py" output="screen">
     <param name="left_image_topic" value="/zedm/zed_node/left_raw/image_raw_color" />
     <param name="right_image_topic" value="/zedm/zed_node/right_raw/image_raw_color" />
-    <param name="left_camera_frame" value="zedm_left_optical_frame" />
+    <param name="left_camera_frame" value="zedm_left_camera_optical_frame" />
     <param name="load_model" value="$(find object_keypoints_ros)/models/modelv2.pt" />
     <param name="calibration" value="$(find object_keypoints_ros)/config/calibration.yaml" />
     <param name="keypoints" value="$(find object_keypoints_ros)/config/keypoints.json" />

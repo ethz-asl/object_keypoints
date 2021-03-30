@@ -44,9 +44,9 @@ class ObjectKeypointPipeline:
         self.input_size = (360, 640)
         model = rospy.get_param('object_keypoints_ros/load_model', "/home/ken/Hack/catkin_ws/src/object_keypoints/model/modelv2.pt")
         if rospy.get_param('object_keypoints_ros/pnp', False):
-            self.pipeline = pipeline.PnPKeypointPipeline(model, self._read_keypoints(), False)
+            self.pipeline = pipeline.PnPKeypointPipeline(model, self._read_keypoints(), torch.cuda.is_available())
         else:
-            self.pipeline = pipeline.KeypointPipeline(model, self._read_keypoints(), False)
+            self.pipeline = pipeline.KeypointPipeline(model, self._read_keypoints(), torch.cuda.is_available())
         self.rgb_mean = torch.tensor([0.5, 0.5, 0.5], requires_grad=False, dtype=torch.float32)[:, None, None]
         self.rgb_std = torch.tensor([0.25, 0.25, 0.25], requires_grad=False, dtype=torch.float32)[:, None, None]
         self._read_calibration()
@@ -107,7 +107,7 @@ class ObjectKeypointPipeline:
             getattr(self, f'point{i}_pub').publish(msg)
 
     def _publish_pose(self, T, time):
-        msg = ros_utils.transform_to_pose(T, self.left_camera_frame, time)
+        msg = ros_utils.transform_to_pose(T, self.left_camera_frame, rospy.Time(0))
         self.pose_pub.publish(msg)
 
     def _publish_heatmaps(self, left, right, left_keypoints, right_keypoints):
