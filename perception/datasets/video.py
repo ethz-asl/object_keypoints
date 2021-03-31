@@ -37,7 +37,7 @@ class StereoVideoDataset(IterableDataset):
     width = 1280
     height = 720
 
-    def __init__(self, base_dir, augment=False, target_size=[90, 160], camera=None, random_crop=False,
+    def __init__(self, base_dir, augment=False, target_size=[360, 640], camera=None, random_crop=False,
             include_pose=False):
         if camera is None:
             camera = self.LEFT
