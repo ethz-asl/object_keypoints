@@ -45,14 +45,14 @@ class KeypointExtractionComponent:
                 self.indices[y, x, 1] = np.float32(y) + 0.5
 
     def reset(self):
-        self.clustering_left = clustering_utils.KeypointClustering(self.K, 1.25)
-        self.clustering_right = clustering_utils.KeypointClustering(self.K, 1.25)
+        self.clustering_left = clustering_utils.KeypointClustering(self.K-1, 1.25)
+        self.clustering_right = clustering_utils.KeypointClustering(self.K-1, 1.25)
 
     def _to_probabilities(self, prediction):
         return (prediction + 1.0) * 0.5
 
     def _extract_keypoints(self, heatmap, clustering):
-        keypoints = np.zeros((1 + self.K, 2), dtype=heatmap.dtype)
+        keypoints = np.zeros((self.K, 2), dtype=heatmap.dtype)
         # Center point
         center_point = heatmap[0]
         where_larger = center_point > self.PROBABILITY_CUTOFF
@@ -77,7 +77,7 @@ class KeypointExtractionComponent:
         right = self._to_probabilities(right)
         N = left.shape[0]
 
-        keypoints = np.zeros((2, N, 1 + self.K, 2), dtype=left.dtype)
+        keypoints = np.zeros((2, N, self.K, 2), dtype=left.dtype)
         for i in range(left.shape[0]):
             keypoints[0, i] = self._extract_keypoints(left[i], self.clustering_left)
             keypoints[1, i] = self._extract_keypoints(right[i], self.clustering_right)
@@ -96,10 +96,12 @@ class TriangulationComponent:
         self.scaling_factor = None
         self.F = None
 
-    def reset(self, K, Kp, T_RL, scaling_factor):
+    def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
         self.K = camera_utils.scale_camera_matrix(K, 1.0 / scaling_factor)
         self.Kp = camera_utils.scale_camera_matrix(Kp, 1.0 / scaling_factor)
-        self.T_RL = T_RL
+        self.D = D
+        self.Dp = Dp
+        self.T_RL = T_RL.astype(np.float32)
         R = self.T_RL[:3, :3]
         t = self.T_RL[:3, 3]
         Kp_inv = np.linalg.inv(self.Kp)
@@ -126,11 +128,14 @@ class TriangulationComponent:
         # Permute keypoints into the same order as left.
         right_keypoints = right_keypoints[associations]
 
-        P1 = (camera_utils.projection_matrix(self.K, np.eye(4))).astype(np.float32)
-        P2 = (self.Kp @ np.eye(3, 4) @ self.T_RL).astype(np.float32)
+        left_keypoints = cv2.undistortPoints(left_keypoints.T.astype(np.float32), self.K, self.D)[:, 0, :]
+        right_keypoints = cv2.undistortPoints(right_keypoints.T.astype(np.float32), self.Kp, self.Dp)[:, 0, :]
+        P1 = np.eye(3, 4, dtype=np.float32)
+        P2 = self.T_RL[:3].astype(np.float32)
         p_LK = cv2.triangulatePoints(
-            P1, P2, left_keypoints.T.astype(np.float32), right_keypoints.T.astype(np.float32)
+            P1, P2, left_keypoints.T, right_keypoints.T
         ).T  # N x 4
+
         p_LK = p_LK / p_LK[:, 3:4]
         return p_LK
 
@@ -222,13 +227,13 @@ class PoseSolveComponent:
 class KeypointPipeline:
     def __init__(self, model, points_3d, cuda):
         self.inference = InferenceComponent(model, cuda)
-        self.keypoint_extraction = KeypointExtractionComponent(points_3d.shape[0]-1)
+        self.keypoint_extraction = KeypointExtractionComponent(points_3d.shape[0])
         self.triangulation = TriangulationComponent(points_3d.shape[0])
         self.pose_solve = PoseSolveComponent(points_3d)
 
     def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
         self.keypoint_extraction.reset()
-        self.triangulation.reset(K, Kp, T_RL, scaling_factor)
+        self.triangulation.reset(K, Kp, D, Dp, T_RL, scaling_factor)
 
     def __call__(self, left, right):
         heatmap_l, heatmap_r = self.inference(left, right)
