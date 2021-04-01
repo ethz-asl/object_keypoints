@@ -123,7 +123,6 @@ class StereoVideoDataset(IterableDataset):
 
             target[y_start:y_end, x_start:x_end] += kernel[y_range_start:y_range_end, x_range_start:x_range_end]
 
-
     def __iter__(self):
         video_file = 'left.mp4' if self.camera == self.LEFT else 'right.mp4'
         video_file = os.path.join(self.base_dir, video_file)
@@ -167,7 +166,7 @@ class StereoVideoDataset(IterableDataset):
         if self.resize_target:
             target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
 
-        target = (target / self.kernel_max * 2.0) - 1.0
+        target = target / self.kernel_max
         if not self.include_pose:
             return frame, target
         else:

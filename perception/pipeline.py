@@ -34,10 +34,10 @@ class KeypointExtractionComponent:
     name = "keypoints"
     PROBABILITY_CUTOFF = 0.25
 
-    def __init__(self, K):
+    def __init__(self, K, prediction_size):
         self.K = K
         self.reset()
-        prediction_size = 90, 160
+        prediction_size = prediction_size
         self.indices = np.zeros((*prediction_size, 2), dtype=np.float32)
         for y in range(prediction_size[0]):
             for x in range(prediction_size[1]):
@@ -220,9 +220,9 @@ class PoseSolveComponent:
         return T
 
 class KeypointPipeline:
-    def __init__(self, model, points_3d, cuda):
+    def __init__(self, model, prediction_size, points_3d, cuda):
         self.inference = InferenceComponent(model, cuda)
-        self.keypoint_extraction = KeypointExtractionComponent(points_3d.shape[0]-1)
+        self.keypoint_extraction = KeypointExtractionComponent(points_3d.shape[0]-1, prediction_size)
         self.triangulation = TriangulationComponent(points_3d.shape[0])
         self.pose_solve = PoseSolveComponent(points_3d)
 
@@ -245,10 +245,10 @@ class KeypointPipeline:
         return out
 
 class PnPKeypointPipeline:
-    def __init__(self, model, keypoints, cuda):
+    def __init__(self, model, prediction_size, keypoints, cuda):
         self.inference = InferenceComponent(model, cuda)
         # Cluster all but center point.
-        self.keypoint_extraction = KeypointExtractionComponent(keypoints.shape[0] - 1)
+        self.keypoint_extraction = KeypointExtractionComponent(keypoints.shape[0] - 1, prediction_size)
         self.pnp_l = PnPComponent(keypoints)
         self.pnp_r = PnPComponent(keypoints)
 

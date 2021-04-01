@@ -2,6 +2,7 @@ import argparse
 import os
 import hud
 import time
+import json
 import cv2
 import torch
 import numpy as np
@@ -24,18 +25,24 @@ def read_args():
     return parser.parse_args()
 
 class Sequence:
-    def __init__(self, flags, sequence, prediction_size=(90, 160)):
+    def __init__(self, flags, sequence, prediction_size=(360, 640)):
         self.flags = flags
         self.sequence_path = sequence
-        self.prediction_size = (90, 160)
+        self.prediction_size = prediction_size
         self.left_loader = self._loader(StereoVideoDataset(sequence, camera=0, augment=False, include_pose=True))
         self.right_loader = self._loader(StereoVideoDataset(sequence, camera=1, augment=False, include_pose=True))
         self._load_calibration()
+        self._read_keypoints()
 
         self.scaling_factor = np.array(self.image_size[::-1]) / np.array(self.prediction_size[::-1])
 
     def _loader(self, dataset):
         return DataLoader(dataset, num_workers=1, batch_size=self.flags.batch_size, pin_memory=True)
+
+    def _read_keypoints(self):
+        filepath = os.path.join(self.sequence_path, 'keypoints.json')
+        with open(filepath, 'rt') as f:
+            self.keypoints = np.array(json.loads(f.read())['3d_points'])[:, :3]
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.sequence_path, 'calibration.yaml')
@@ -43,6 +50,8 @@ class Sequence:
 
         self.K = params['K']
         self.Kp = params['Kp']
+        self.D = params['D']
+        self.Dp = params['Dp']
         self.T_LR = params['T_LR']
         self.image_size = params['image_size']
 
@@ -131,10 +140,7 @@ class Runner:
             self.visualizer = None
             self.figure = pyplot.figure(figsize=(16, 4.5))
         self.frame_number = 0
-        self._setup_pipeline()
-
-    def _setup_pipeline(self):
-        self.pipeline = KeypointPipeline(self.flags.model, 3)
+        self.pipeline = None
 
     def _sequences(self):
         return sorted([os.path.join(self.flags.data, s) for s in os.listdir(self.flags.data)])
@@ -164,7 +170,8 @@ class Runner:
         self.figure.clf()
 
     def _play_predictions(self, sequence):
-        self.pipeline.reset(sequence.K, sequence.Kp, sequence.T_LR, sequence.scaling_factor)
+        self.pipeline = KeypointPipeline(self.flags.model, sequence.prediction_size, sequence.keypoints, torch.cuda.is_available())
+        self.pipeline.reset(sequence.K, sequence.Kp, sequence.D, sequence.Dp, sequence.T_LR, sequence.scaling_factor)
 
         rate = Rate(60)
         for i, ((left_frame, l_target, T_WL), (right_frame, r_target, T_WR)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):

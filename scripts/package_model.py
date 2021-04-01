@@ -13,10 +13,9 @@ class Model(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = KeypointModule.load_from_checkpoint(model).model
-        self.model.backbone.set_swish(memory_efficient=False)
 
     def forward(self, x):
-        return torch.tanh(self.model(x))
+        return torch.sigmoid(self.model(x))
 
 def main():
     flags = read_args()

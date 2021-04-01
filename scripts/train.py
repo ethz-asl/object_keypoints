@@ -33,6 +33,8 @@ class KeypointModule(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self._load_model()
+        self.negative_weight = 0.001
+        self.positive_weight = 0.999
 
     def _load_model(self):
         self.model = KeypointNet(2)
@@ -40,11 +42,19 @@ class KeypointModule(pl.LightningModule):
     def forward(self, frame):
         return self.model(frame)
 
+    def _loss(self, y_hat, target):
+        positive = target > 0.5
+
+        loss = F.mse_loss(torch.sigmoid(y_hat), target, reduction='none')
+        positive_loss = loss[positive].sum() * self.positive_weight
+        negative_loss = loss[positive == False].sum() * self.negative_weight
+        return (positive_loss + negative_loss) / y_hat.shape[0]
+
     def training_step(self, batch, batch_idx):
         frame, target = batch
         y_hat = self.model(frame)
 
-        loss = F.mse_loss(torch.tanh(y_hat), target, reduction='sum') / y_hat.shape[0]
+        loss = self._loss(y_hat, target)
 
         self.log('train_loss', loss)
 
@@ -54,7 +64,7 @@ class KeypointModule(pl.LightningModule):
         frame, target = batch
         y_hat = self.model(frame)
 
-        loss = F.mse_loss(torch.tanh(y_hat), target, reduction='sum') / y_hat.shape[0]
+        loss = self._loss(y_hat, target)
 
         self.log('val_loss', loss)
         return loss
