@@ -40,6 +40,8 @@ def _project(p_WK, T_WC, K):
     point = K @ p_CK[:3]
     return point / point[2]
 
+BACKPROJECTED_POINT_COLOR = np.array([0.0, 0.0, 1.0, 1.0])
+
 class PointCommand:
     def __init__(self, point, rect):
         """
@@ -99,18 +101,20 @@ class LabelingApp:
         self.left_image_pane = hud.ImagePane()
         self.right_image_pane = hud.ImagePane()
         self.left_points = hud.PointLayer([])
-        self.left_back_projected_points = hud.PointLayer([])
+        self.left_backprojected_points = hud.PointLayer([])
+        self.right_points = hud.PointLayer([])
+        self.right_backprojected_points = hud.PointLayer([])
+
         left_pane = hud.ZStack()
         left_pane.add_view(self.left_image_pane)
         left_pane.add_view(self.left_points)
-        left_pane.add_view(self.left_back_projected_points)
+        left_pane.add_view(self.left_backprojected_points)
         self.left_image_pane.add_click_handler(self._left_pane_clicked)
 
         right_pane = hud.ZStack()
-        self.right_points = hud.PointLayer([])
         right_pane.add_view(self.right_image_pane)
         right_pane.add_view(self.right_points)
-
+        right_pane.add_view(self.right_backprojected_points)
         self.right_image_pane.add_click_handler(self._right_pane_clicked)
 
         main_view = hud.HStack()
@@ -145,7 +149,7 @@ class LabelingApp:
 
     def set_current(self, path):
         self.done = False
-        self.left_back_projected_points.clear_points()
+        self.left_backprojected_points.clear_points()
         self.left_keypoints = []
         self.right_keypoints = []
         self.left_points.clear_points()
@@ -161,6 +165,10 @@ class LabelingApp:
 
         self.left_video = video_io.vread(os.path.join(path, 'left.mp4'))
         self.right_video = video_io.vread(os.path.join(path, 'right.mp4'))
+        print(self.left_video.shape[0], "left frames")
+        print(self.right_video.shape[0], "right frames")
+        print(self.hdf['left/camera_transform'].shape[0], "left poses")
+        print(self.hdf['right/camera_transform'].shape[0], "right poses")
         left_frame = self.left_video[self.left_frame_index]
         right_frame = self.right_video[self.right_frame_index]
         left_frame = cv2.undistort(left_frame, self.K, self.D)
@@ -208,8 +216,6 @@ class LabelingApp:
         self.Kp = camera_utils.camera_matrix(right['intrinsics'])
         self.D = np.array(left['distortion_coeffs'])
         self.Dp = np.array(right['distortion_coeffs'])
-        self.T_RL = np.array(right['T_cn_cnm1'])
-        self.T_LR = np.linalg.inv(self.T_RL)
 
     def _left_pane_clicked(self, event):
         print(f"left pane clicked {event.p.x} {event.p.y}")
@@ -272,11 +278,13 @@ class LabelingApp:
 
     def _save(self):
         if len(self.left_keypoints) == len(self.right_keypoints):
-            self.left_back_projected_points.set_points([], np.zeros((0, 4)))
+            self.left_backprojected_points.set_points([], np.zeros((0, 4)))
+            self.right_backprojected_points.set_points([], np.zeros((0, 4)))
             Xs = []
             for left, right in zip(self.left_keypoints, self.right_keypoints):
-                X, point = self._triangulate(left, right)
-                self.left_back_projected_points.add_point(point, KEYPOINT_COLOR)
+                X, left, right = self._triangulate(left, right)
+                self.left_backprojected_points.add_point(left, BACKPROJECTED_POINT_COLOR)
+                self.right_backprojected_points.add_point(right, BACKPROJECTED_POINT_COLOR)
                 Xs.append(X)
             out_file = os.path.join(self.current_dir, KEYPOINT_FILENAME)
             print("Saving points")
@@ -285,8 +293,10 @@ class LabelingApp:
     def _triangulate(self, left_point, right_point):
         T_WL = self.hdf['left/camera_transform'][self.left_frame_index]
         T_WR = self.hdf['right/camera_transform'][self.right_frame_index]
-        T_LR = np.linalg.inv(T_WL) @ T_WR
-        T_RL = np.linalg.inv(T_WR) @ T_WL
+        T_LW = np.linalg.inv(T_WL)
+        T_RW = np.linalg.inv(T_WR)
+        T_LR = T_LW @ T_WR
+        T_RL = T_RW @ T_WL
 
         x = np.array([left_point.x, left_point.y])[:, None]
         xp = np.array([right_point.x, right_point.y])[:, None]
@@ -296,16 +306,23 @@ class LabelingApp:
 
         p_LK = cv2.triangulatePoints(P1, P2, x, xp)
         p_LK = p_LK / p_LK[3]
-        print("p_LK:", p_LK.T)
         p_WK = T_WL @ p_LK
 
-        projected_x = P1 @ p_LK
+        projected_x = (self.K @ np.eye(3, 4)) @ T_LW @ p_WK
         projected_x /= projected_x[2]
+        should_be = (self.K @ np.eye(3, 4)) @ p_LK
+        should_be = should_be / should_be[2]
         print('projected_x: ', projected_x.T)
+        print("should be:", should_be.T, "diff: ", (should_be - projected_x).T)
         left_backprojected = hud.Point(projected_x[0], projected_x[1])
         left_backprojected = hud.utils.to_normalized_device_coordinates(left_backprojected, IMAGE_RECT)
 
-        return p_WK, left_backprojected
+        right_projected_x = (self.Kp @ np.eye(3, 4)) @ T_RW @ p_WK
+        right_projected_x /= right_projected_x[2]
+        right_backprojected = hud.Point(right_projected_x[0], right_projected_x[1])
+        right_backprojected = hud.utils.to_normalized_device_coordinates(right_backprojected, IMAGE_RECT)
+
+        return p_WK, left_backprojected, right_backprojected
 
     def quit(self):
         print("Mischief managed.")
