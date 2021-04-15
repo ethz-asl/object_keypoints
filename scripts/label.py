@@ -23,22 +23,20 @@ def read_args():
             help="Path to kalibr calibration file.")
     return parser.parse_args()
 
-def _write_points(out_file, Xs, left_keypoints, right_keypoints):
+def _write_points(out_file, Xs):
     """Writes keypoints to file as json. """
     contents = {
-        'left_points': [[kp.x, kp.y] for kp in left_keypoints], # 2d keypoints in left image frame.
-        'right_points': [[kp.x, kp.y] for kp in right_keypoints], # 2d keypoints in right image frame
         '3d_points': [x.ravel().tolist() for x in Xs] # Triangulated 3D points in world frame.
     } # Points are ordered and correspond to each other.
     with open(out_file, 'w') as f:
         f.write(json.dumps(contents))
 
-def _project(p_WK, T_WC, K):
-    T_CW = np.linalg.inv(T_WC)
-    p_CK = T_CW @ p_WK
-    p_CK /= p_CK[3]
-    point = K @ p_CK[:3]
-    return point / point[2]
+def _project(p_WK, T_WC, K, D):
+    T_CW = np.linalg.inv(T_WC.astype(np.float64))
+    p_WK = p_WK / p_WK[3]
+    R, _ = cv2.Rodrigues(T_CW[:3, :3])
+    point, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3, 0], R, T_CW[:3, 3], K, D)
+    return point.ravel()
 
 BACKPROJECTED_POINT_COLOR = np.array([0.0, 0.0, 1.0, 1.0])
 
@@ -91,6 +89,7 @@ class LabelingApp:
         self.commands = []
         self.left_keypoints = []
         self.right_keypoints = []
+        self.world_points = []
         self.alpha = 1.0
         self._create_views()
         self.hdf = None
@@ -163,16 +162,14 @@ class LabelingApp:
         self.current_dir = path
         self.left_frame_index, self.right_frame_index = self._find_furthest()
 
-        self.left_video = video_io.vread(os.path.join(path, 'left.mp4'))
-        self.right_video = video_io.vread(os.path.join(path, 'right.mp4'))
+        self.left_video = video_io.vread(os.path.join(path, 'left_preview.mp4'))
+        self.right_video = video_io.vread(os.path.join(path, 'right_preview.mp4'))
         print(self.left_video.shape[0], "left frames")
         print(self.right_video.shape[0], "right frames")
         print(self.hdf['left/camera_transform'].shape[0], "left poses")
         print(self.hdf['right/camera_transform'].shape[0], "right poses")
         left_frame = self.left_video[self.left_frame_index]
         right_frame = self.right_video[self.right_frame_index]
-        left_frame = cv2.undistort(left_frame, self.K, self.D)
-        right_frame = cv2.undistort(right_frame, self.Kp, self.Dp)
         self.left_image_pane.set_texture(left_frame)
         self.right_image_pane.set_texture(right_frame)
 
@@ -180,20 +177,19 @@ class LabelingApp:
         if os.path.exists(keypoint_path):
             self._load_points(keypoint_path)
 
-
     def _load_points(self, keypoint_file):
         #TODO: Either use backprojected keypoints or store which frame was used to select keypoints.
         # This wasn't a problem before swapping the frame was added.
         with open(keypoint_file, 'rt') as f:
             keypoints = json.loads(f.read())
-            world_points = keypoints['3d_points']
+            self.world_points = [np.array(x).reshape(4, 1) for x in keypoints['3d_points']]
             self.left_keypoints = []
             self.right_keypoints = []
-            for point in world_points:
+            for point in self.world_points:
                 T_WL = self.hdf['left/camera_transform'][self.left_frame_index]
                 T_WR = self.hdf['right/camera_transform'][self.right_frame_index]
-                left_point = _project(point, T_WL, self.K)
-                right_point = _project(point, T_WR, self.Kp)
+                left_point = _project(point, T_WL, self.K, self.D)
+                right_point = _project(point, T_WR, self.Kp, self.Dp)
                 left_hud = hud.Point(left_point[0], left_point[1])
                 left_ndc = hud.utils.to_normalized_device_coordinates(left_hud, IMAGE_RECT)
                 right_hud = hud.Point(right_point[0], right_point[1])
@@ -213,12 +209,11 @@ class LabelingApp:
         right = calibration['cam1']
 
         self.K = camera_utils.camera_matrix(left['intrinsics'])
-        self.Kp = camera_utils.camera_matrix(right['intrinsics'])
         self.D = np.array(left['distortion_coeffs'])
         self.Dp = np.array(right['distortion_coeffs'])
+        self.Kp = camera_utils.camera_matrix(right['intrinsics'])
 
     def _left_pane_clicked(self, event):
-        print(f"left pane clicked {event.p.x} {event.p.y}")
         command = AddLeftPointCommand(event.p, self.left_image_pane.get_rect())
         command.forward(self)
         self.commands.append(command)
@@ -234,14 +229,29 @@ class LabelingApp:
     def _swap_left_frame(self):
         self.left_frame_index = random.randint(0, self.hdf['left/camera_transform'].shape[0]-1)
         left_frame = self.left_video[self.left_frame_index]
-        left_frame = cv2.undistort(left_frame, self.K, self.D)
         self.left_image_pane.set_texture(left_frame)
+        self.left_keypoints = []
+        self.left_points.clear_points()
+        self._recompute_points()
 
     def _swap_right_frame(self):
         self.right_frame_index = random.randint(0, self.right_video.shape[0]-1)
         right_frame = self.right_video[self.right_frame_index]
-        right_frame = cv2.undistort(right_frame, self.Kp, self.Dp)
         self.right_image_pane.set_texture(right_frame)
+        self.right_keypoints = []
+        self.right_points.clear_points()
+        self._recompute_points()
+
+    def _recompute_points(self):
+        self.left_backprojected_points.clear_points()
+        self.right_backprojected_points.clear_points()
+        for world_point in self.world_points:
+            T_WL = self.hdf['left/camera_transform'][self.left_frame_index]
+            T_WR = self.hdf['right/camera_transform'][self.right_frame_index]
+            left_point = self._backproject_left(world_point)
+            right_point = self._backproject_right(world_point)
+            self.left_backprojected_points.add_point(left_point, BACKPROJECTED_POINT_COLOR)
+            self.right_backprojected_points.add_point(right_point, BACKPROJECTED_POINT_COLOR)
 
     def _set_colors(self):
         left_colors = np.zeros((len(self.left_keypoints), 4))
@@ -280,15 +290,17 @@ class LabelingApp:
         if len(self.left_keypoints) == len(self.right_keypoints):
             self.left_backprojected_points.set_points([], np.zeros((0, 4)))
             self.right_backprojected_points.set_points([], np.zeros((0, 4)))
-            Xs = []
+            self.world_points = []
             for left, right in zip(self.left_keypoints, self.right_keypoints):
-                X, left, right = self._triangulate(left, right)
+                X = self._triangulate(left, right)
+                left = self._backproject_left(X)
+                right = self._backproject_right(X)
                 self.left_backprojected_points.add_point(left, BACKPROJECTED_POINT_COLOR)
                 self.right_backprojected_points.add_point(right, BACKPROJECTED_POINT_COLOR)
-                Xs.append(X)
+                self.world_points.append(X)
             out_file = os.path.join(self.current_dir, KEYPOINT_FILENAME)
             print("Saving points")
-            _write_points(out_file, Xs, self.left_keypoints, self.right_keypoints)
+            _write_points(out_file, self.world_points)
 
     def _triangulate(self, left_point, right_point):
         T_WL = self.hdf['left/camera_transform'][self.left_frame_index]
@@ -304,25 +316,32 @@ class LabelingApp:
         P1 = camera_utils.projection_matrix(self.K, np.eye(4))
         P2 = self.Kp @ np.eye(3, 4) @ T_RL
 
+        x = cv2.fisheye.undistortPoints(x[None, None, :, 0], self.K, self.D, P=self.K).ravel()[:, None]
+        xp = cv2.fisheye.undistortPoints(xp[None, None, :, 0], self.Kp, self.Dp, P=self.Kp).ravel()[:, None]
+
         p_LK = cv2.triangulatePoints(P1, P2, x, xp)
         p_LK = p_LK / p_LK[3]
         p_WK = T_WL @ p_LK
+        return p_WK
 
-        projected_x = (self.K @ np.eye(3, 4)) @ T_LW @ p_WK
-        projected_x /= projected_x[2]
-        should_be = (self.K @ np.eye(3, 4)) @ p_LK
-        should_be = should_be / should_be[2]
-        print('projected_x: ', projected_x.T)
-        print("should be:", should_be.T, "diff: ", (should_be - projected_x).T)
+    def _backproject_left(self, p_WK):
+        T_WL = self.hdf['left/camera_transform'][self.left_frame_index]
+        T_LW = np.linalg.inv(T_WL)
+        p_WK = (p_WK / p_WK[3])
+        R, _ = cv2.Rodrigues(T_LW[:3, :3])
+        projected_x, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3, 0], R, T_LW[:3, 3], self.K, self.D)
+        projected_x = projected_x.ravel()
         left_backprojected = hud.Point(projected_x[0], projected_x[1])
-        left_backprojected = hud.utils.to_normalized_device_coordinates(left_backprojected, IMAGE_RECT)
+        return hud.utils.to_normalized_device_coordinates(left_backprojected, IMAGE_RECT)
 
-        right_projected_x = (self.Kp @ np.eye(3, 4)) @ T_RW @ p_WK
-        right_projected_x /= right_projected_x[2]
-        right_backprojected = hud.Point(right_projected_x[0], right_projected_x[1])
-        right_backprojected = hud.utils.to_normalized_device_coordinates(right_backprojected, IMAGE_RECT)
-
-        return p_WK, left_backprojected, right_backprojected
+    def _backproject_right(self, p_WK):
+        T_WR = self.hdf['right/camera_transform'][self.right_frame_index]
+        T_RW = np.linalg.inv(T_WR)
+        R, _ = cv2.Rodrigues(T_RW[:3, :3])
+        projected_x, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3, 0], R, T_RW[:3, 3], self.Kp, self.Dp)
+        projected_x = projected_x.ravel()
+        right_backprojected = hud.Point(projected_x[0], projected_x[1])
+        return hud.utils.to_normalized_device_coordinates(right_backprojected, IMAGE_RECT)
 
     def quit(self):
         print("Mischief managed.")
