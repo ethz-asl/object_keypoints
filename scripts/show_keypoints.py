@@ -16,6 +16,7 @@ def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
     parser.add_argument('--calibration', default='config/calibration.yaml', help="Calibration yaml file.")
+    parser.add_argument('--rate', '-r', default=30, help="Frames per second.")
     return parser.parse_args()
 
 KEYPOINT_FILENAME = 'keypoints.json'
@@ -35,8 +36,8 @@ class ViewModel:
         self.world_points = [np.array(p) for p in contents['3d_points']]
 
     def _load_video(self, base_dir):
-        self.left_video = video_io.vreader(os.path.join(base_dir, 'left.mp4'))
-        self.right_video = video_io.vreader(os.path.join(base_dir, 'right.mp4'))
+        self.left_video = video_io.vreader(os.path.join(base_dir, 'left_preview.mp4'))
+        self.right_video = video_io.vreader(os.path.join(base_dir, 'right_preview.mp4'))
 
     def _load_metadata(self, base_dir):
         self.hdf = h5py.File(os.path.join(base_dir, 'data.hdf5'), 'r')
@@ -65,7 +66,6 @@ class ViewModel:
         return self
 
     def __next__(self):
-        print(f"Current frame {self.current_frame}, num frames: {self.num_frames}" + 5 * " ", end="\r")
         if self.current_frame >= self.num_frames:
             raise StopIteration()
         T_WL = self.hdf['left/camera_transform'][self.current_frame]
@@ -80,13 +80,12 @@ class ViewModel:
             p_LK = T_LW @ p_WK
             p_RK = T_RW @ p_WK
 
-            p_l = self.K @ np.eye(3, 4) @ T_LW @ p_WK
-            p_r = self.Kp @ np.eye(3, 4) @ T_RW @ p_WK
-            p_l = p_l / p_l[2]
-            p_r = p_r / p_r[2]
-
-            T_WK = np.eye(4)
-            T_WK[:, 3] = p_WK
+            R_l, _ = cv2.Rodrigues(T_LW[:3, :3])
+            R_r, _ = cv2.Rodrigues(T_RW[:3, :3])
+            p_l, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3], R_l, T_LW[:3, 3], self.K, self.D)
+            p_r, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3], R_r, T_RW[:3, 3], self.Kp, self.Dp)
+            p_l = p_l.ravel()
+            p_r = p_r.ravel()
 
             left_frame_points.append(
                     hud.utils.to_normalized_device_coordinates(
@@ -112,6 +111,7 @@ class ViewModel:
 class PointVisualizer:
     def __init__(self, flags):
         self.flags = flags
+        self.paused = False
         self.done = False
         self.window = hud.AppWindow("Keypoints", 1280, 360)
         self._create_views()
@@ -138,14 +138,17 @@ class PointVisualizer:
     def _key_callback(self, event):
         if event.key == 'Q':
             self.done = True
+        elif event.key == ' ':
+            self.paused = not self.paused
 
     def run(self):
-        rate = Rate(30)
+        rate = Rate(self.flags.rate)
         directories = os.listdir(self.flags.base_dir)
         for directory in directories:
             try:
                 view_model = ViewModel(self.flags, os.path.join(self.flags.base_dir, directory))
                 for left_frame, left_points, right_frame, right_points in view_model:
+                    print(f"Current frame {view_model.current_frame}, num frames: {view_model.num_frames}" + 5 * " ", end="\r")
                     self.left_image_pane.set_texture(left_frame)
                     self.right_image_pane.set_texture(right_frame)
                     self.left_image_points.set_points(left_points, constants.KEYPOINT_COLOR[None].repeat(len(left_points), 0))
@@ -153,6 +156,9 @@ class PointVisualizer:
                     if not self.window.update() or self.done:
                         return
                     self.window.poll_events()
+                    while self.paused:
+                        self.window.poll_events()
+                        rate.sleep()
                     rate.sleep()
             finally:
                 view_model.close()

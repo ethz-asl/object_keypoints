@@ -52,10 +52,13 @@ def _write_images(folder, data):
         print('Writing /tmp/encode_bags_tmp/{}/{:05}.png'.format(folder, item['i']), end='\r')
     print("")
 
-def _encode_video(input_files, out_file):
+def _encode_video(input_files, out_file, preview_file):
     subprocess.run(['ffmpeg', '-i', "{}".format(input_files), '-c:a', 'copy',
         '-framerate', '30', '-c:v', 'libx264', '-crf', '0',
         '-preset', 'fast', '-y', out_file])
+    subprocess.run(['ffmpeg', '-i', out_file, '-c:a', 'copy',
+        '-framerate', '30', '-c:v', 'libx264', '-crf', '24', '-vf', 'scale=1280:-1',
+        '-preset', 'fast', '-y', preview_file])
 
 class Runner:
     def __init__(self):
@@ -175,13 +178,15 @@ class Runner:
 
         left_files = os.path.join('/tmp', 'encode_bags_tmp', 'left_raw', '%05d.png')
         out_file = os.path.join(out_folder, 'left.mp4')
+        preview = os.path.join(out_folder, 'left_preview.mp4')
         print("Encoding video {} left".format(bag_name))
-        _encode_video(left_files, out_file)
+        _encode_video(left_files, out_file, preview)
         shutil.rmtree('/tmp/encode_bags_tmp/left_raw')
         right_files = os.path.join('/tmp', 'encode_bags_tmp', 'right_raw', '%05d.png')
         out_file = os.path.join(out_folder, 'right.mp4')
+        preview = os.path.join(out_folder, 'right_preview.mp4')
         print("Encoding video {} right".format(bag_name))
-        _encode_video(right_files, out_file)
+        _encode_video(right_files, out_file, preview)
 
         shutil.rmtree('/tmp/encode_bags_tmp/right_raw')
 

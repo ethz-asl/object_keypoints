@@ -24,8 +24,8 @@ def _compute_kernel(size, center):
             kernel[i, j] = _gaussian_kernel(center, x)
     return kernel / kernel.sum()
 
-RGB_MEAN = np.array([0.5, 0.5, 0.5], dtype=np.float32)
-RGB_STD = np.array([0.25, 0.25, 0.25], dtype=np.float32)
+RGB_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+RGB_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 class StereoVideoDataset(IterableDataset):
     LEFT = 0
@@ -37,7 +37,7 @@ class StereoVideoDataset(IterableDataset):
     width = 1280
     height = 720
 
-    def __init__(self, base_dir, augment=False, target_size=[90, 160], camera=None, random_crop=False,
+    def __init__(self, base_dir, augment=False, target_size=[360, 640], camera=None, random_crop=False,
             include_pose=False):
         if camera is None:
             camera = self.LEFT
@@ -123,7 +123,6 @@ class StereoVideoDataset(IterableDataset):
 
             target[y_start:y_end, x_start:x_end] += kernel[y_range_start:y_range_end, x_range_start:x_range_end]
 
-
     def __iter__(self):
         video_file = 'left.mp4' if self.camera == self.LEFT else 'right.mp4'
         video_file = os.path.join(self.base_dir, video_file)
@@ -167,7 +166,7 @@ class StereoVideoDataset(IterableDataset):
         if self.resize_target:
             target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
 
-        target = (target / self.kernel_max * 2.0) - 1.0
+        target = target / self.kernel_max
         if not self.include_pose:
             return frame, target
         else:
