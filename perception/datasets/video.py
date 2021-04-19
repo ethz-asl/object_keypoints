@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import yaml
 import torch
+import cv2
 from PIL import Image
 from torch.utils.data import IterableDataset, DataLoader
 from perception.utils import camera_utils
@@ -37,18 +38,24 @@ class StereoVideoDataset(IterableDataset):
     width = 1280
     height = 720
 
-    def __init__(self, base_dir, augment=False, target_size=[360, 640], camera=None, random_crop=False,
+    def __init__(self, base_dir, keypoint_config, augment=False, target_size=[360, 640], camera=None, random_crop=False,
             include_pose=False):
         if camera is None:
             camera = self.LEFT
         self.base_dir = os.path.expanduser(base_dir)
         self.metadata_path = os.path.join(self.base_dir, "data.hdf5")
-        self._init_points()
-        self.target_size = target_size
         self.camera = camera
+        self.keypoint_config = [1] + keypoint_config['keypoint_config']
+        self._init_points()
+        self._load_calibration()
+        self.target_size = target_size
         self.image_size = 360, 640
         self.resize_target = self.image_size != tuple(target_size)
         self.include_pose = include_pose
+
+        targets = {'image': 'image'}
+        for i in range(self.keypoint_maps):
+            targets[f'target{i}'] = 'mask'
 
         if augment:
             augmentations = []
@@ -59,35 +66,46 @@ class StereoVideoDataset(IterableDataset):
             augmentations += [
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5)]
-            self.augmentations = A.Compose(augmentations, additional_targets={'image': 'image', 'target0': 'mask', 'target1': 'mask'})
+            self.augmentations = A.Compose(augmentations, additional_targets=targets)
         else:
             self.augmentations = A.Compose([
                 A.Resize(height=self.image_size[0], width=self.image_size[1])
-            ], additional_targets={'image': 'image', 'target0': 'mask', 'target1': 'mask'})
+            ], additional_targets=targets)
         self.mean = RGB_MEAN
         self.std = RGB_STD
 
     def _init_videos(self):
         return left_video, right_video
 
-    def _calibration(self):
+    def _load_calibration(self):
         calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
-        with open(calibration_file, 'rt') as f:
-            calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        calibration = camera_utils.load_calibration_params(calibration_file)
 
         if self.camera == self.LEFT:
-            left = calibration['cam0']
-            return camera_utils.camera_matrix(left['intrinsics'])
+            self.K = calibration['K']
+            self.D = calibration['D']
         elif self.camera == self.RIGHT:
-            right = calibration['cam1']
-            return camera_utils.camera_matrix(right['intrinsics'])
+            self.K = calibration['Kp']
+            self.D = calibration['Dp']
 
     def _init_points(self):
         filepath = os.path.join(self.base_dir, 'keypoints.json')
         with open(filepath, 'r') as f:
             contents = json.loads(f.read())
-        self.world_points = np.array(contents['3d_points'])
-        assert(self.world_points.shape[0] == 4)
+        world_points = np.array(contents['3d_points'])
+        self.n_keypoints = sum(self.keypoint_config)
+        self.n_objects = world_points.shape[0] // (self.n_keypoints - 1)
+        self.keypoint_maps = len(self.keypoint_config)
+
+        self.world_points = np.zeros((self.n_keypoints * self.n_objects, 3))
+        n_real_keypoints = self.n_keypoints - 1
+        # Add center points.
+        for i in range(self.n_objects):
+            start = i * self.n_keypoints
+            end = (i+1) * self.n_keypoints
+            object_points = world_points[i * n_real_keypoints:(i+1) * n_real_keypoints, :3]
+            self.world_points[start] = object_points.mean(axis=0)
+            self.world_points[start+1:end] = object_points
 
     def _add_kernel(self, target, kernel, points):
         """
@@ -129,39 +147,49 @@ class StereoVideoDataset(IterableDataset):
         video = video_io.vreader(video_file)
         try:
             with h5py.File(self.metadata_path, 'r') as f:
-                K = self._calibration()
                 if self.camera == self.LEFT:
                     poses = f['left/camera_transform']
                 elif self.camera == self.RIGHT:
                     poses = f['right/camera_transform']
 
                 for i, frame in enumerate(video):
-                    yield self._extract_example(poses, i, frame, K)
+                    yield self._extract_example(poses, i, frame)
         finally:
             video.close()
 
-    def _extract_example(self, poses, i, frame, K):
+    def _extract_example(self, poses, i, frame):
         T_WC = poses[i]
         T_CW = np.linalg.inv(T_WC)
 
         p_WK = self.world_points[:, :, None]
-        I = np.eye(3, 4)
-        x = K @ I @ T_CW @ p_WK
-        x = x[:, :, 0]
-        x /= x[:, 2:]
 
-        target = np.zeros((2, self.height, self.width), dtype=np.float32)
+        R, _ = cv2.Rodrigues(T_CW[:3, :3])
 
-        self._add_kernel(target[0], self.kernel, x[0:1])
-        self._add_kernel(target[1], self.kernel, x[1:])
+        projected, _ = cv2.fisheye.projectPoints(self.world_points[:, None, :3], R, T_CW[:3, 3], self.K, self.D)
+        projected = projected[:, 0, :]
+
+        target = np.zeros((self.keypoint_maps, self.height, self.width), dtype=np.float32)
+        for object_index in range(self.n_objects):
+            keypoint_start = object_index * self.n_keypoints
+            keypoint_end = (object_index + 1) * self.n_keypoints
+            points = projected[keypoint_start:keypoint_end]
+            for i, n_points in enumerate(self.keypoint_config):
+                start = sum(self.keypoint_config[:i])
+                end = start + n_points
+                self._add_kernel(target[i], self.kernel, points[start:end])
 
         frame = (frame.astype(np.float32) / 255.0 - self.mean) / self.std
-        out = self.augmentations(image=frame, target0=target[0], target1=target[1])
+        targets = {}
+        for i in range(self.keypoint_maps):
+            targets[f'target{i}'] = target[i]
+
+        out = self.augmentations(image=frame, **targets)
 
         frame = torch.tensor(out['image'].transpose([2, 0, 1]))
-        target = np.zeros((2, 360, 640), dtype=np.float32)
-        target[0] = out['target0']
-        target[1] = out['target1']
+        target = np.zeros((self.keypoint_maps, 360, 640), dtype=np.float32)
+        for i in range(self.keypoint_maps):
+            target[i] = out[f'target{i}']
+
         target = torch.tensor(target)
         if self.resize_target:
             target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]

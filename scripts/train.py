@@ -2,6 +2,7 @@ import argparse
 import os
 import torch
 import numpy as np
+import json
 from matplotlib import pyplot as plt
 from albumentations.augmentations import transforms
 import albumentations as A
@@ -21,6 +22,7 @@ def read_args():
     parser.add_argument('--gpus', type=int, default=1)
     parser.add_argument('--fp16', action='store_true', help="Use half-precision.")
     parser.add_argument('--pool', default=1000, type=int, help="How many examples to use in shuffle pool")
+    parser.add_argument('--keypoints', default="config/cups.json", help="Keypoint configuration file.")
     return parser.parse_args()
 
 def _to_image(image):
@@ -30,14 +32,15 @@ def _to_image(image):
     return np.clip((image * 255.0).round(), 0.0, 255.0).astype(np.uint8)
 
 class KeypointModule(pl.LightningModule):
-    def __init__(self):
+    def __init__(self, keypoint_config):
         super().__init__()
+        self.keypoint_config = keypoint_config
         self._load_model()
         self.negative_weight = 0.001
         self.positive_weight = 0.999
 
     def _load_model(self):
-        self.model = KeypointNet(2)
+        self.model = KeypointNet(len(self.keypoint_config["keypoint_config"]) + 1)
 
     def forward(self, frame):
         return self.model(frame)
@@ -81,8 +84,9 @@ def _build_datasets(sequences, **kwargs):
     return datasets
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, flags):
+    def __init__(self, flags, keypoint_config):
         super().__init__()
+        self.keypoint_config = keypoint_config
         datasets = []
         train_directories = os.listdir(flags.train)
         train_sequences = sorted([os.path.join(flags.train, d) for d in train_directories])
@@ -97,9 +101,9 @@ class DataModule(pl.LightningDataModule):
             train_datasets = []
             for camera in [0, 1]:
                 for augment in [False, True]:
-                    train_datasets += _build_datasets(self.train_sequences, augment=augment, random_crop=augment, camera=camera)
-            val_datasets = (_build_datasets(self.val_sequences, augment=False, random_crop=False) +
-                    _build_datasets(self.val_sequences, augment=False, random_crop=False, camera=1))
+                    train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=augment, random_crop=augment, camera=camera)
+            val_datasets = (_build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, random_crop=False) +
+                    _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, random_crop=False, camera=1))
             self.train = SamplingPool(Chain(train_datasets, shuffle=True), self.flags.pool)
             self.val = Chain(val_datasets, shuffle=False)
         else:
@@ -113,8 +117,10 @@ class DataModule(pl.LightningDataModule):
 
 def main():
     flags = read_args()
-    data_module = DataModule(flags)
-    module = KeypointModule()
+    with open(flags.keypoints) as f:
+        keypoint_config = json.load(f)
+    data_module = DataModule(flags, keypoint_config)
+    module = KeypointModule(keypoint_config)
 
     trainer = pl.Trainer(
             gpus=flags.gpus,

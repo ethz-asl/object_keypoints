@@ -7,6 +7,7 @@ import subprocess
 import numpy as np
 import tf2_py as tf2
 import h5py
+import skvideo.io
 from time import time
 from argparse import ArgumentParser
 from PIL import Image
@@ -18,23 +19,25 @@ def read_args():
     parser = ArgumentParser()
     parser.add_argument('--bags', required=True, help="Path to directory containing rosbags.")
     parser.add_argument('--out', '-o', required=True, help="Where to write output files.")
+    parser.add_argument('--skip', default=0, type=int, help="Skip the first n bags.")
+    parser.add_argument('--until', default=None, type=int, help="Encode until the nth bag.")
     return parser.parse_args()
 
-def handeye_calibration():
+def left_to_right_transform():
     message = msg.TransformStamped()
-    message.transform.translation.x = 0.079515306338359126
-    message.transform.translation.y = -0.10793799501764983
-    message.transform.translation.z = 0.10524835798491808
-    message.transform.rotation.x = -0.01746506375221181
-    message.transform.rotation.y = 0.0010681032195002033
-    message.transform.rotation.z = 0.39240551381051381
-    message.transform.rotation.w = 0.91962587144705221
+    message.transform.translation.x = 0.06242168917
+    message.transform.translation.y = 0.000234
+    message.transform.translation.z = 5.759928320e-05
+    message.transform.rotation.x = 0.0
+    message.transform.rotation.y = 0.0
+    message.transform.rotation.z = 0.0
+    message.transform.rotation.w = 1.0
     message.header.seq = 0
-    message.header.frame_id = "panda_link7"
-    message.child_frame_id = "zedm_left_camera_optical_frame"
+    message.header.frame_id = "zedm_left_camera_optical_frame"
+    message.child_frame_id = "zedm_right_camera_optical_frame"
     return message
 
-T_HL = ros_utils.message_to_transform(handeye_calibration())
+left_right = left_to_right_transform()
 
 bridge = CvBridge()
 
@@ -52,11 +55,23 @@ def _write_images(folder, data):
         print('Writing /tmp/encode_bags_tmp/{}/{:05}.png'.format(folder, item['i']), end='\r')
     print("")
 
-def _encode_video(input_files, out_file, preview_file):
-    subprocess.run(['ffmpeg', '-i', "{}".format(input_files), '-c:a', 'copy',
-        '-framerate', '30', '-c:v', 'libx264', '-crf', '0',
-        '-preset', 'fast', '-y', out_file])
-    subprocess.run(['ffmpeg', '-i', out_file, '-c:a', 'copy',
+def _encode_full_video(data, filepath):
+    writer = skvideo.io.FFmpegWriter(filepath, outputdict={
+        '-vcodec': 'libx264',
+        '-crf': '0',
+        '-preset': 'fast',
+        '-framerate': '30'
+    })
+    try:
+        for i, item in enumerate(data):
+            print(f"Encoding frame {i:06}", end='\r')
+            frame = bridge.imgmsg_to_cv2(item['message'], desired_encoding='rgb8')
+            writer.writeFrame(frame)
+    finally:
+        writer.close()
+
+def _encode_preview(video_file, preview_file):
+    subprocess.run(['ffmpeg', '-i', video_file, '-c:a', 'copy',
         '-framerate', '30', '-c:v', 'libx264', '-crf', '24', '-vf', 'scale=1280:-1',
         '-preset', 'fast', '-y', preview_file])
 
@@ -79,6 +94,9 @@ class Runner:
         tf_tree = tf2.BufferCore(rospy.Duration(360000.0))
         for topic, message, t in bag.read_messages(topics=["/tf", "/tf_static"]):
             for tf_message in message.transforms:
+                if tf_message.header.frame_id == 'zedm_left_optical_frame' and tf_message.child_frame_id == 'zedm_right_optical_frame':
+                    tf_message.transform = left_right.transform
+
                 if topic == '/tf_static':
                     tf_tree.set_transform_static(tf_message, f"bag/{topic}")
                 else:
@@ -144,13 +162,6 @@ class Runner:
         _add_poses(out_file, 'left', left_poses)
         _add_poses(out_file, 'right', right_poses)
 
-    def _write_images(self, left_data, right_data):
-        os.makedirs('/tmp/encode_bags_tmp/left_raw', exist_ok=True)
-        os.makedirs('/tmp/encode_bags_tmp/right_raw', exist_ok=True)
-
-        _write_images('left_raw', left_data)
-        _write_images('right_raw', right_data)
-
     def _write_calibration(self, h5_file, bag):
         left_calibration = None
         right_calibration = None
@@ -158,6 +169,8 @@ class Runner:
             left_calibration = message
         for topic, message, t in bag.read_messages(topics="/zedm/zed_node/right_raw/camera_info"):
             right_calibration = message
+        if left_calibration is None and right_calibration is None:
+            return
 
         group = h5_file.create_group('calibration')
         left = group.create_group('left')
@@ -174,24 +187,21 @@ class Runner:
     def _encode_video(self, bag_name, left_data, right_data):
         out_folder = os.path.join(self.flags.out, bag_name.split(os.path.extsep)[0])
 
-        self._write_images(left_data, right_data)
-
-        left_files = os.path.join('/tmp', 'encode_bags_tmp', 'left_raw', '%05d.png')
         out_file = os.path.join(out_folder, 'left.mp4')
         preview = os.path.join(out_folder, 'left_preview.mp4')
         print("Encoding video {} left".format(bag_name))
-        _encode_video(left_files, out_file, preview)
-        shutil.rmtree('/tmp/encode_bags_tmp/left_raw')
-        right_files = os.path.join('/tmp', 'encode_bags_tmp', 'right_raw', '%05d.png')
+
+        _encode_full_video(left_data, out_file)
+        _encode_preview(out_file, preview)
+
         out_file = os.path.join(out_folder, 'right.mp4')
         preview = os.path.join(out_folder, 'right_preview.mp4')
         print("Encoding video {} right".format(bag_name))
-        _encode_video(right_files, out_file, preview)
-
-        shutil.rmtree('/tmp/encode_bags_tmp/right_raw')
+        _encode_full_video(right_data, out_file)
+        _encode_preview(out_file, preview)
 
     def main(self):
-        for path in self._bags:
+        for path in self._bags[self.flags.skip:self.flags.until]:
             with rosbag.Bag(path, 'r') as bag:
                 bag_name = os.path.basename(path)
                 out_folder = self._create_out_folder(bag_name)

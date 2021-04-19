@@ -45,14 +45,12 @@ class KeypointExtractionComponent:
                 self.indices[y, x, 1] = np.float32(y) + 0.5
 
     def reset(self):
-        self.clustering_left = clustering_utils.KeypointClustering(self.K-1, 1.25)
-        self.clustering_right = clustering_utils.KeypointClustering(self.K-1, 1.25)
-
-    def _to_probabilities(self, prediction):
-        return (prediction + 1.0) * 0.5
+        self.clustering_left = clustering_utils.KeypointClustering(self.K, 10.0)
+        self.clustering_right = clustering_utils.KeypointClustering(self.K, 10.0)
 
     def _extract_keypoints(self, heatmap, clustering):
-        keypoints = np.zeros((self.K, 2), dtype=heatmap.dtype)
+        keypoints = np.zeros((1 + self.K, 2), dtype=heatmap.dtype)
+        cv2.resize(heatmap,
         # Center point
         center_point = heatmap[0]
         where_larger = center_point > self.PROBABILITY_CUTOFF
@@ -73,8 +71,6 @@ class KeypointExtractionComponent:
         return keypoints
 
     def __call__(self, left, right):
-        left = self._to_probabilities(left)
-        right = self._to_probabilities(right)
         N = left.shape[0]
 
         keypoints = np.zeros((2, N, self.K, 2), dtype=left.dtype)

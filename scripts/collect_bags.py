@@ -72,7 +72,7 @@ class Program:
         self.status_line = RECORDING
         self._refresh_screen()
         try:
-            process = subprocess.run(['rosbag', 'record', '--buffsize=0', '--chunksize=524288', '--output-name', filepath, '--duration', '20'] + TOPICS_TO_RECORD,
+            process = subprocess.run(['rosbag', 'record', '--buffsize=0', '--chunksize=524288', '--output-name', filepath, '--duration', '30'] + TOPICS_TO_RECORD,
                     stdout=subprocess.PIPE, check=True)
         except subprocess.CalledProcessError as e:
             print(e)

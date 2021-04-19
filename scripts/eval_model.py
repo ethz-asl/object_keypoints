@@ -150,7 +150,7 @@ class Runner:
         return cv2.resize(frame, self.IMAGE_SIZE)
 
     def _to_heatmap(self, target):
-        target = np.clip((target + 1.0) / 2.0, 0.0, 1.0)
+        target = np.clip(target, 0.0, 1.0)
         target = target.sum(axis=0)
         target = (cm.inferno(target) * 255.0).astype(np.uint8)[:, :, :3]
         return cv2.resize(target[:, :, :3], self.IMAGE_SIZE)
