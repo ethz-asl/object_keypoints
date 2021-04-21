@@ -25,20 +25,27 @@ def _compute_kernel(size, center):
             kernel[i, j] = _gaussian_kernel(center, x)
     return kernel / kernel.sum()
 
+def _pixel_indices(height, width):
+    out = np.zeros((2, height, width), dtype=np.float32)
+    for i in range(height):
+        for j in range(width):
+            out[:, i, j] = np.array([j + 0.5, i + 0.5])
+    return out
+
 RGB_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 RGB_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 class StereoVideoDataset(IterableDataset):
     LEFT = 0
     RIGHT = 1
-    kernel_size = 50
-    kernel_center = 25
+    kernel_size = 24
+    kernel_center = 12
     kernel = _compute_kernel(kernel_size, kernel_center)
     kernel_max = kernel.max()
     width = 1280
     height = 720
 
-    def __init__(self, base_dir, keypoint_config, augment=False, target_size=[360, 640], camera=None, random_crop=False,
+    def __init__(self, base_dir, keypoint_config, augment=False, target_size=[180, 320], camera=None, random_crop=False,
             include_pose=False):
         if camera is None:
             camera = self.LEFT
@@ -52,8 +59,10 @@ class StereoVideoDataset(IterableDataset):
         self.image_size = 360, 640
         self.resize_target = self.image_size != tuple(target_size)
         self.include_pose = include_pose
+        self.target_pixel_indices = _pixel_indices(*target_size)
 
-        targets = {'image': 'image'}
+        assert(target_size[0] / self.image_size[0] == target_size[1] / self.image_size[1])
+        targets = {'image': 'image', 'keypoints': 'keypoints'}
         for i in range(self.keypoint_maps):
             targets[f'target{i}'] = 'mask'
 
@@ -66,11 +75,12 @@ class StereoVideoDataset(IterableDataset):
             augmentations += [
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5)]
-            self.augmentations = A.Compose(augmentations, additional_targets=targets)
+            self.augmentations = A.Compose(augmentations, additional_targets=targets,
+                    keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
         else:
             self.augmentations = A.Compose([
                 A.Resize(height=self.image_size[0], width=self.image_size[1])
-            ], additional_targets=targets)
+            ], additional_targets=targets, keypoint_params=A.KeypointParams(format='xy'))
         self.mean = RGB_MEAN
         self.std = RGB_STD
 
@@ -106,6 +116,14 @@ class StereoVideoDataset(IterableDataset):
             object_points = world_points[i * n_real_keypoints:(i+1) * n_real_keypoints, :3]
             self.world_points[start] = object_points.mean(axis=0)
             self.world_points[start+1:end] = object_points
+
+        # Should be an equal amount of points for each object.
+        if world_points.shape[0] != ((self.n_keypoints-1) * self.n_objects):
+            print(f"""
+Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_keypoints-1}\
+ with {self.n_objects} objects in sequence {self.base_dir}
+            """)
+            assert False , "Wrong number of keypoints"
 
     def _add_kernel(self, target, kernel, points):
         """
@@ -183,7 +201,9 @@ class StereoVideoDataset(IterableDataset):
         for i in range(self.keypoint_maps):
             targets[f'target{i}'] = target[i]
 
-        out = self.augmentations(image=frame, **targets)
+        out = self.augmentations(image=frame, keypoints=projected, **targets)
+
+        centers = self._compute_centers(np.array(out['keypoints']))
 
         frame = torch.tensor(out['image'].transpose([2, 0, 1]))
         target = np.zeros((self.keypoint_maps, 360, 640), dtype=np.float32)
@@ -194,11 +214,27 @@ class StereoVideoDataset(IterableDataset):
         if self.resize_target:
             target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
 
+        centers = torch.tensor(centers)
+
         target = target / self.kernel_max
         if not self.include_pose:
-            return frame, target
+            return frame, target, centers
         else:
-            return frame, target, T_WC
+            return frame, target, centers, T_WC
+
+    def _compute_centers(self, projected_keypoints):
+        scaling_factor = float(self.target_size[0] / self.image_size[0])
+        projected_keypoints = projected_keypoints * scaling_factor
+        centers = np.zeros((2, *self.target_size), dtype=np.float32)
+        for object_index in range(self.n_objects):
+            center_keypoint = projected_keypoints[object_index * self.n_keypoints]
+            center_vectors = (center_keypoint[:, None, None] - self.target_pixel_indices)
+            for i in range(1, self.n_keypoints):
+                keypoint = projected_keypoints[object_index * self.n_keypoints + i]
+                distance_to_keypoint = np.linalg.norm(keypoint[:, None, None] - self.target_pixel_indices, axis=0)
+                within_range = distance_to_keypoint < 6.25
+                centers[:, within_range] = center_vectors[:, within_range]
+        return centers
 
     @staticmethod
     def to_image(image):

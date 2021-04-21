@@ -353,8 +353,13 @@ def main():
 
     app = LabelingApp(flags)
 
-    for subdir in os.listdir(flags.base_dir):
-        path = os.path.join(flags.base_dir, subdir)
+    if os.path.exists(os.path.join(flags.base_dir, 'data.hdf5')):
+        # Labeling single sequence
+        sequence_directories = [flags.base_dir]
+    else:
+        sequence_directories = [os.path.join(flags.base_dir, d) for d in os.listdir(flags.base_dir)]
+    for path in sequence_directories:
+        print(f"Labeling: {path}")
         app.set_current(path)
         while app.update():
             time.sleep(0.01)
