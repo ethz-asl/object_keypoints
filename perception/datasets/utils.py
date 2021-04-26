@@ -1,3 +1,4 @@
+import itertools
 import random
 from torch.utils import data
 
@@ -24,17 +25,29 @@ class RoundRobin(data.IterableDataset):
                 continue
 
 class Chain(data.IterableDataset):
-    def __init__(self, datasets, shuffle=True):
+    def __init__(self, datasets, shuffle=True, infinite=False):
         self.shuffle = shuffle
         self.datasets = datasets
+        self.infinite = infinite
 
     def __iter__(self):
         datasets = self.datasets
         if self.shuffle:
             random.shuffle(datasets)
-        for dataset in self.datasets:
-            for item in dataset:
-                yield item
+        if self.infinite:
+            for dataset in itertools.cycle(self.datasets):
+                for item in dataset:
+                    try:
+                        yield item
+                    except StopIteration:
+                        continue
+        else:
+            for dataset in self.datasets:
+                for item in dataset:
+                    yield item
+
+    def __len__(self):
+        return sum(len(d) for d in self.datasets)
 
 class SamplingPool(data.IterableDataset):
     """
@@ -69,4 +82,7 @@ class SamplingPool(data.IterableDataset):
             random_index = random.randint(0, len(pool)-1)
             yield pool[random_index]
             del pool[random_index]
+
+    def __len__(self):
+        return len(self.dataset)
 

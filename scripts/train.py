@@ -6,8 +6,8 @@ import json
 from matplotlib import pyplot as plt
 from albumentations.augmentations import transforms
 import albumentations as A
-from torch.nn import functional as F
 from torch.utils.data import DataLoader
+from perception.loss import KeypointLoss
 from perception.datasets.video import StereoVideoDataset
 from perception.datasets.utils import RoundRobin, SamplingPool, Chain
 from perception.models import KeypointNet
@@ -36,38 +36,29 @@ class KeypointModule(pl.LightningModule):
         super().__init__()
         self.keypoint_config = keypoint_config
         self._load_model()
-        self.negative_weight = 0.001
-        self.positive_weight = 0.999
+        self.loss = KeypointLoss(keypoint_config['keypoint_config'])
 
     def _load_model(self):
-        self.model = KeypointNet(len(self.keypoint_config["keypoint_config"]) + 1)
+        self.model = KeypointNet([180, 320], heatmaps_out=len(self.keypoint_config["keypoint_config"]) + 1)
 
     def forward(self, frame):
         return self.model(frame)
 
-    def _loss(self, y_hat, target):
-        positive = target > 0.5
-
-        loss = F.mse_loss(torch.sigmoid(y_hat), target, reduction='none')
-        positive_loss = loss[positive].sum() * self.positive_weight
-        negative_loss = loss[positive == False].sum() * self.negative_weight
-        return (positive_loss + negative_loss) / y_hat.shape[0]
-
     def training_step(self, batch, batch_idx):
-        frame, target = batch
-        y_hat = self.model(frame)
+        frame, target, gt_centers = batch
+        heatmaps, centers = self(frame)
 
-        loss = self._loss(y_hat, target)
+        loss = self.loss(heatmaps, target, centers, gt_centers)
 
         self.log('train_loss', loss)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        frame, target = batch
-        y_hat = self.model(frame)
+        frame, target, gt_centers = batch
+        y_hat, centers = self(frame)
 
-        loss = self._loss(y_hat, target)
+        loss = self.loss(y_hat, target, centers, gt_centers)
 
         self.log('val_loss', loss)
         return loss
@@ -104,13 +95,14 @@ class DataModule(pl.LightningDataModule):
                     train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=augment, random_crop=augment, camera=camera)
             val_datasets = (_build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, random_crop=False) +
                     _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, random_crop=False, camera=1))
-            self.train = SamplingPool(Chain(train_datasets, shuffle=True), self.flags.pool)
+            self.train = SamplingPool(Chain(train_datasets, shuffle=True, infinite=True), self.flags.pool)
             self.val = Chain(val_datasets, shuffle=False)
         else:
             raise NotImplementedError()
 
     def train_dataloader(self):
-        return DataLoader(self.train, batch_size=self.flags.batch_size, num_workers=self.flags.workers)
+        return DataLoader(self.train, batch_size=self.flags.batch_size, num_workers=self.flags.workers,
+                persistent_workers=self.flags.workers > 0)
 
     def val_dataloader(self):
         return DataLoader(self.val, batch_size=self.flags.batch_size * 2, num_workers=self.flags.workers)

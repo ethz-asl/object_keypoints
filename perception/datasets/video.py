@@ -76,13 +76,20 @@ class StereoVideoDataset(IterableDataset):
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5)]
             self.augmentations = A.Compose(augmentations, additional_targets=targets,
-                    keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
+                    keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
         else:
             self.augmentations = A.Compose([
                 A.Resize(height=self.image_size[0], width=self.image_size[1])
-            ], additional_targets=targets, keypoint_params=A.KeypointParams(format='xy'))
+            ], additional_targets=targets, keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
         self.mean = RGB_MEAN
         self.std = RGB_STD
+
+    def __len__(self):
+        with h5py.File(self.metadata_path, 'r') as f:
+            if self.camera == self.LEFT:
+                return f['left/camera_transform'].shape[0]
+            else:
+                return f['right/camera_transform'].shape[0]
 
     def _init_videos(self):
         return left_video, right_video
@@ -216,7 +223,7 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
 
         centers = torch.tensor(centers)
 
-        target = target / self.kernel_max
+        target = torch.clamp(target / self.kernel_max, 0.0, 1.0)
         if not self.include_pose:
             return frame, target, centers
         else:
