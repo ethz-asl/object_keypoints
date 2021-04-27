@@ -9,8 +9,8 @@ class FocalLoss(_Loss):
         self.alpha = 0.25
 
     def forward(self, pred, target):
+        bce = F.binary_cross_entropy_with_logits(pred, target)
         p = torch.sigmoid(pred)
-        bce = F.binary_cross_entropy(p, target)
         p_t = (target > 0.5) * p + (target < 0.5) * (1.0 - p)
         return self.alpha * (1.0 - p_t) ** self.gamma * bce
 
@@ -50,7 +50,7 @@ if __name__ == "__main__":
     focal_loss = FocalLoss()
     target = torch.empty(10, 10).random_(2)
     parameter = torch.randn(10, 10, requires_grad=True)
-    optimizer = torch.optim.SGD(lr=100.0, params=[parameter])
+    optimizer = torch.optim.SGD(lr=10.0, params=[parameter])
     for _ in range(10000):
         loss = focal_loss(parameter, target).mean()
         loss.backward()
