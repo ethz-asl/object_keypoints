@@ -45,26 +45,33 @@ class KeypointModule(pl.LightningModule):
         return self.model(frame)
 
     def training_step(self, batch, batch_idx):
-        frame, target, gt_centers = batch
-        heatmaps, centers = self(frame)
+        frame, target, gt_depth, gt_centers = batch
+        heatmaps, p_depth, centers = self(frame)
 
-        loss = self.loss(heatmaps, target, centers, gt_centers)
+        loss, losses = self.loss(heatmaps, target, p_depth, gt_depth, centers, gt_centers)
 
         self.log('train_loss', loss)
+        self.log('heatmap_loss', losses[0])
+        self.log('depth_loss', losses[1])
+        self.log('center_loss', losses[2])
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        frame, target, gt_centers = batch
-        y_hat, centers = self(frame)
+        frame, target, gt_depth, gt_centers = batch
+        y_hat, p_depth, centers = self(frame)
 
-        loss = self.loss(y_hat, target, centers, gt_centers)
+        loss, losses = self.loss(y_hat, target, p_depth, gt_depth, centers, gt_centers)
 
         self.log('val_loss', loss)
+        self.log('heatmap_loss_val', losses[0])
+        self.log('depth_loss_val', losses[1])
+        self.log('center_loss_val', losses[2])
+
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=3e-4)
+        return torch.optim.Adam(self.parameters(), lr=3e-5)
 
 
 def _build_datasets(sequences, **kwargs):
@@ -92,11 +99,11 @@ class DataModule(pl.LightningDataModule):
             train_datasets = []
             for camera in [0, 1]:
                 for augment in [False, True]:
-                    train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=augment, random_crop=augment, camera=camera)
-            val_datasets = (_build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, random_crop=False) +
-                    _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, random_crop=False, camera=1))
+                    train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=augment, camera=camera)
+            val_datasets = (_build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False) +
+                    _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, camera=1))
             self.train = SamplingPool(Chain(train_datasets, shuffle=True, infinite=True), self.flags.pool)
-            self.val = Chain(val_datasets, shuffle=False)
+            self.val = Chain(val_datasets, shuffle=True)
         else:
             raise NotImplementedError()
 
@@ -116,6 +123,7 @@ def main():
 
     trainer = pl.Trainer(
             gpus=flags.gpus,
+            reload_dataloaders_every_epoch=False,
             precision=16 if flags.fp16 else 32)
 
     trainer.fit(module, data_module)

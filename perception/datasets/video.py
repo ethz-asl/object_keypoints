@@ -13,7 +13,7 @@ from skvideo import io as video_io
 from torch.nn import functional as F
 import albumentations as A
 
-def _gaussian_kernel(x, y, length_scale=10.0):
+def _gaussian_kernel(x, y, length_scale=5.0):
     return np.exp(-np.linalg.norm(x - y)**2 / length_scale**2)
 
 def _compute_kernel(size, center):
@@ -38,43 +38,42 @@ RGB_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 class StereoVideoDataset(IterableDataset):
     LEFT = 0
     RIGHT = 1
-    kernel_size = 24
-    kernel_center = 12
+    kernel_size = 50
+    kernel_center = 25
     kernel = _compute_kernel(kernel_size, kernel_center)
     kernel_max = kernel.max()
     width = 1280
     height = 720
+    width_resized = 640
+    height_resized = 360
 
-    def __init__(self, base_dir, keypoint_config, augment=False, target_size=[180, 320], camera=None, random_crop=False,
+    def __init__(self, base_dir, keypoint_config, augment=False, target_size=[180, 320], camera=None,
             include_pose=False):
         if camera is None:
             camera = self.LEFT
         self.base_dir = os.path.expanduser(base_dir)
         self.metadata_path = os.path.join(self.base_dir, "data.hdf5")
         self.camera = camera
+        self.augment = augment
         self.keypoint_config = [1] + keypoint_config['keypoint_config']
         self._init_points()
         self._load_calibration()
         self.target_size = target_size
-        self.image_size = 360, 640
+        self.image_size = self.height_resized, self.width_resized
         self.resize_target = self.image_size != tuple(target_size)
         self.include_pose = include_pose
         self.target_pixel_indices = _pixel_indices(*target_size)
 
         assert(target_size[0] / self.image_size[0] == target_size[1] / self.image_size[1])
         targets = {'image': 'image', 'keypoints': 'keypoints'}
-        for i in range(self.keypoint_maps):
-            targets[f'target{i}'] = 'mask'
-
         if augment:
-            augmentations = []
-            if random_crop:
-                augmentations += [A.RandomCrop(height=self.image_size[0], width=self.image_size[1])]
-            else:
-                augmentations += [A.Resize(height=self.image_size[0], width=self.image_size[1])]
-            augmentations += [
-                A.HorizontalFlip(p=0.5),
-                A.VerticalFlip(p=0.5)]
+            augmentations = [A.Resize(height=self.image_size[0], width=self.image_size[1]),
+                    A.RandomBrightnessContrast(p=0.25),
+                    A.RandomGamma(p=0.25),
+                    A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=50, val_shift_limit=50, p=0.25),
+                    A.GaussNoise(p=0.5),
+                    A.HorizontalFlip(p=0.5),
+                    A.VerticalFlip(p=0.5)]
             self.augmentations = A.Compose(augmentations, additional_targets=targets,
                     keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
         else:
@@ -90,9 +89,6 @@ class StereoVideoDataset(IterableDataset):
                 return f['left/camera_transform'].shape[0]
             else:
                 return f['right/camera_transform'].shape[0]
-
-    def _init_videos(self):
-        return left_video, right_video
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
@@ -132,39 +128,41 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
             """)
             assert False , "Wrong number of keypoints"
 
-    def _add_kernel(self, target, kernel, points):
+    @classmethod
+    def _add_kernel(cls, target, points):
         """
         target: height x width regression target
-        kernel: kernel to add at point locations
         points
         """
-        center = np.array([self.kernel_center, self.kernel_center], dtype=np.float32)
+        center = np.array([cls.kernel_center, cls.kernel_center], dtype=np.float32)
+        height = target.shape[0]
+        width = target.shape[1]
         for i in range(points.shape[0]):
             point = points[i]
             x = round(point[0])
             y = round(point[1])
-            x_start = max(x - self.kernel_center, 0)
-            x_end = max(min(x + self.kernel_center, self.width), 0)
-            y_start = max(y - self.kernel_center, 0)
-            y_end = max(min(y + self.kernel_center, self.height), 0)
+            x_start = max(x - cls.kernel_center, 0)
+            x_end = max(min(x + cls.kernel_center, width), 0)
+            y_start = max(y - cls.kernel_center, 0)
+            y_end = max(min(y + cls.kernel_center, height), 0)
             y_range_start = 0
-            y_range_end = self.kernel_size
+            y_range_end = cls.kernel_size
             x_range_start = 0
-            x_range_end = self.kernel_size
+            x_range_end = cls.kernel_size
             if y_start == 0:
-                y_range_start = abs(y - self.kernel_center)
-            if y + self.kernel_center >= self.height:
-                past_end = max(y + self.kernel_center - self.height, 0)
-                y_range_end = y_range_start + self.kernel_size - past_end
+                y_range_start = abs(y - cls.kernel_center)
+            if y + cls.kernel_center >= height:
+                past_end = max(y + cls.kernel_center - height, 0)
+                y_range_end = y_range_start + cls.kernel_size - past_end
             if x_start == 0:
-                x_range_start = abs(x - self.kernel_center)
-            if x + self.kernel_center > self.width:
-                past_end = max(x + self.kernel_center - self.width, 0)
-                x_range_end = x_range_start + self.kernel_size - past_end
+                x_range_start = abs(x - cls.kernel_center)
+            if x + cls.kernel_center > width:
+                past_end = max(x + cls.kernel_center - width, 0)
+                x_range_end = x_range_start + cls.kernel_size - past_end
             if (y_range_end - y_range_start) < 0 or (x_range_end - x_range_start) < 0:
                 continue
 
-            target[y_start:y_end, x_start:x_end] += kernel[y_range_start:y_range_end, x_range_start:x_range_end]
+            target[y_start:y_end, x_start:x_end] += cls.kernel[y_range_start:y_range_end, x_range_start:x_range_end]
 
     def __iter__(self):
         video_file = 'left.mp4' if self.camera == self.LEFT else 'right.mp4'
@@ -193,41 +191,51 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
         projected, _ = cv2.fisheye.projectPoints(self.world_points[:, None, :3], R, T_CW[:3, 3], self.K, self.D)
         projected = projected[:, 0, :]
 
-        target = np.zeros((self.keypoint_maps, self.height, self.width), dtype=np.float32)
+        out = self.augmentations(image=frame, keypoints=projected)
+
+        keypoints = np.array(out['keypoints'])
+        centers = self._compute_centers(keypoints)
+
+        target = np.zeros((self.keypoint_maps, 360, 640), dtype=np.float32)
         for object_index in range(self.n_objects):
             keypoint_start = object_index * self.n_keypoints
             keypoint_end = (object_index + 1) * self.n_keypoints
-            points = projected[keypoint_start:keypoint_end]
+            points = keypoints[keypoint_start:keypoint_end]
             for i, n_points in enumerate(self.keypoint_config):
                 start = sum(self.keypoint_config[:i])
                 end = start + n_points
-                self._add_kernel(target[i], self.kernel, points[start:end])
+                self._add_kernel(target[i], points[start:end])
 
-        frame = (frame.astype(np.float32) / 255.0 - self.mean) / self.std
-        targets = {}
-        for i in range(self.keypoint_maps):
-            targets[f'target{i}'] = target[i]
-
-        out = self.augmentations(image=frame, keypoints=projected, **targets)
-
-        centers = self._compute_centers(np.array(out['keypoints']))
-
-        frame = torch.tensor(out['image'].transpose([2, 0, 1]))
-        target = np.zeros((self.keypoint_maps, 360, 640), dtype=np.float32)
-        for i in range(self.keypoint_maps):
-            target[i] = out[f'target{i}']
-
+        p_CK = (T_CW @ np.concatenate([p_WK, np.ones((p_WK.shape[0], 1, 1))], axis=1))[:, :3, 0]
+        depth = self._compute_depth(p_CK, keypoints)
         target = torch.tensor(target)
         if self.resize_target:
             target = F.interpolate(target[None], size=self.target_size, mode='bilinear', align_corners=False)[0]
 
+        frame = torch.tensor((out['image'].astype(np.float32).transpose([2, 0, 1]) / 255.0 - self.mean[:, None, None]) / self.std[:, None, None])
         centers = torch.tensor(centers)
 
         target = torch.clamp(target / self.kernel_max, 0.0, 1.0)
         if not self.include_pose:
-            return frame, target, centers
+            return frame, target, depth, centers
         else:
-            return frame, target, centers, T_WC
+            return frame, target, depth, centers, T_WC
+
+    def _compute_depth(self, p_CK, keypoints):
+        scaling_factor = float(self.target_size[0] / self.image_size[0])
+        keypoints = keypoints * scaling_factor
+        depth = np.zeros((self.keypoint_maps, *self.target_size), dtype=np.float32)
+        current_point = 0
+        for object_index in range(self.n_objects):
+            for current_map, keypoints_in_map in enumerate(self.keypoint_config):
+                for i in range(keypoints_in_map):
+                    distance = np.linalg.norm(p_CK[current_point])
+                    keypoint = keypoints[current_point]
+                    distance_to_keypoint = np.linalg.norm(keypoint[:, None, None] - self.target_pixel_indices, axis=0)
+                    within_range = distance_to_keypoint < 10.0
+                    depth[current_map, within_range] = distance
+                    current_point += 1
+        return depth
 
     def _compute_centers(self, projected_keypoints):
         scaling_factor = float(self.target_size[0] / self.image_size[0])
@@ -239,7 +247,7 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
             for i in range(1, self.n_keypoints):
                 keypoint = projected_keypoints[object_index * self.n_keypoints + i]
                 distance_to_keypoint = np.linalg.norm(keypoint[:, None, None] - self.target_pixel_indices, axis=0)
-                within_range = distance_to_keypoint < 6.25
+                within_range = distance_to_keypoint < 10.0
                 centers[:, within_range] = center_vectors[:, within_range]
         return centers
 

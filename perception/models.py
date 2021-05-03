@@ -15,6 +15,7 @@ class CenterHead(nn.Module):
                 nn.ReLU(inplace=True))
         intermediate_channels = 32 + extra_channels
         self.intermediate_layers = nn.Sequential(
+                nn.Dropout2d(p=0.1),
                 nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(intermediate_channels),
                 nn.ReLU(inplace=True))
@@ -41,17 +42,22 @@ class HeatmapHead(nn.Module):
                 nn.BatchNorm2d(intermediate_channels),
                 nn.ReLU(inplace=True))
         self.output_conv = nn.Sequential(
-                nn.Conv2d(intermediate_channels, 32, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(32),
+                nn.Dropout2d(p=0.1),
+                nn.Conv2d(intermediate_channels, 64, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(64),
                 nn.ReLU(inplace=True),
-                nn.Conv2d(32, features_out, kernel_size=1, padding=0, bias=True))
+                nn.Conv2d(64, features_out * 2, kernel_size=1, padding=0, bias=True))
+        self.n_features = features_out
 
     def forward(self, x, large):
         x = self.layers(x)
         x = F.interpolate(x, [45, 80], mode='bilinear', align_corners=False)
         x = self.intermediate_layers(torch.cat([x, large], dim=1))
         x = F.interpolate(x, self.output_size, mode='bilinear', align_corners=False)
-        return self.output_conv(x)
+        x = self.output_conv(x)
+        heatmap = x[:, :self.n_features]
+        depth = F.relu(x[:, self.n_features:])
+        return heatmap, depth
 
 class KeypointNet(nn.Module):
     def __init__(self, output_size, heatmaps_out=2, regression_features=2):
@@ -70,8 +76,8 @@ class KeypointNet(nn.Module):
 
     def forward(self, x):
         backbone_out = self.backbone(x)
-        heatmaps = self.heatmap_head(backbone_out['out'], backbone_out['large'])
+        heatmaps, depth = self.heatmap_head(backbone_out['out'], backbone_out['large'])
         center_vectors = self.center_head(backbone_out['out'], backbone_out['large'])
-        return heatmaps, center_vectors
+        return heatmaps, depth, center_vectors
 
 

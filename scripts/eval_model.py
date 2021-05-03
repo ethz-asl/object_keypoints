@@ -19,25 +19,30 @@ def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('data', help="Path to dataset folder.")
     parser.add_argument('--model', '-m', type=str, required=True, help="Path to the model to evaluate.")
-    parser.add_argument('--batch-size', '-b', type=int, default=1, help="Batch size used in data loader and inference.")
+    parser.add_argument('--centers', action='store_true', help="Show object center predictions.")
     parser.add_argument('--ground-truth', action='store_true', help="Show labels instead of making predictions.")
+    parser.add_argument('--keypoints', type=str, default='config/cups.json', help="The keypoint configuration file.")
     parser.add_argument('--write', type=str, help="Write frames to folder.")
     return parser.parse_args()
-
+FULL_IMAGE_SIZE = hud.Rect(0.0, 0.0, 1280.0, 720.0)
 class Sequence:
-    def __init__(self, flags, sequence, prediction_size=(360, 640)):
+    def __init__(self, flags, sequence, prediction_size=(180, 320)):
         self.flags = flags
         self.sequence_path = sequence
         self.prediction_size = prediction_size
-        self.left_loader = self._loader(StereoVideoDataset(sequence, camera=0, augment=False, include_pose=True))
-        self.right_loader = self._loader(StereoVideoDataset(sequence, camera=1, augment=False, include_pose=True))
+        with open(flags.keypoints, 'rt') as f:
+            self.keypoint_config = json.load(f)
+        self.left_loader = self._loader(StereoVideoDataset(sequence, self.keypoint_config,
+            camera=0, augment=False, include_pose=True))
+        self.right_loader = self._loader(StereoVideoDataset(sequence, self.keypoint_config,
+            camera=1, augment=False, include_pose=True))
         self._load_calibration()
         self._read_keypoints()
 
         self.scaling_factor = np.array(self.image_size[::-1]) / np.array(self.prediction_size[::-1])
 
     def _loader(self, dataset):
-        return DataLoader(dataset, num_workers=1, batch_size=self.flags.batch_size, pin_memory=True)
+        return DataLoader(dataset, num_workers=1, batch_size=1, pin_memory=True)
 
     def _read_keypoints(self):
         filepath = os.path.join(self.sequence_path, 'keypoints.json')
@@ -53,19 +58,20 @@ class Sequence:
         self.D = params['D']
         self.Dp = params['Dp']
         self.T_LR = params['T_LR']
+        self.T_RL = np.linalg.inv(self.T_LR)
+        self.R_L, _ = cv2.Rodrigues(np.eye(3))
+        self.R_R, _ = cv2.Rodrigues(self.T_LR[:3, :3])
         self.image_size = params['image_size']
 
-    def to_frame_points(self, p_WK, T_CW):
-        """
-        p_WK: N x 4 homogenous world coordinates
-        Returns np.array N x 2 normalized device coordinate points
-        """
-        p_CK = T_CW @ p_WK[:, :, None]
-        p_CK = (self.K @ np.eye(3, 4) @ p_CK)[:, :, 0]
-        p_CK = p_CK / p_CK[:, 2:3]
-        normalized = p_CK[:, :2] / (np.array([self.image_size[1], self.image_size[0]])[None, :] * 0.5) - 1.0
-        normalized[:, 1] *= -1.0
-        return normalized
+    def project_points_left(self, p_LK):
+        p_LK = np.concatenate(p_LK, axis=0)
+        points, _ = cv2.fisheye.projectPoints(p_LK[:, None], self.R_L, np.zeros(3), self.K, self.D)
+        return points.reshape(-1, 2)
+
+    def project_points_right(self, p_LK):
+        p_LK = np.concatenate(p_LK, axis=0)
+        points, _ = cv2.fisheye.projectPoints(p_LK[:, None], self.R_R, self.T_LR[:3, 3], self.Kp, self.Dp)
+        return points.reshape(-1, 2)
 
     def project_points(self, p_WK, T_CW, K):
         image_points = K @ np.eye(3, 4) @ T_CW @ p_WK[:, :, None]
@@ -81,7 +87,6 @@ class Visualizer:
         self.done = False
         self.window = hud.AppWindow("Keypoints", 1280, 360)
         self._create_views()
-        self._point_colors = _point_colors(4)
 
     def _create_views(self):
         self.left_image_pane = hud.ImagePane()
@@ -114,10 +119,16 @@ class Visualizer:
         self.right_image_pane.set_texture(image)
 
     def set_left_points(self, points):
-        self.left_points.set_points(self._to_hud_points(points), self._point_colors)
+        colors = _point_colors(points.shape[0])
+        points = self._to_hud_points(points)
+        hud_points = [hud.utils.to_normalized_device_coordinates(p, FULL_IMAGE_SIZE) for p in points]
+        self.left_points.set_points(hud_points, colors)
 
     def set_right_points(self, points):
-        self.right_points.set_points(self._to_hud_points(points), self._point_colors)
+        colors = _point_colors(points.shape[0])
+        points = self._to_hud_points(points)
+        points = [hud.utils.to_normalized_device_coordinates(p, FULL_IMAGE_SIZE) for p in points]
+        self.right_points.set_points(points, colors)
 
     def _to_hud_points(self, points):
         points = [hud.Point(p[0], p[1]) for p in points]
@@ -170,59 +181,62 @@ class Runner:
         self.figure.clf()
 
     def _play_predictions(self, sequence):
-        self.pipeline = KeypointPipeline(self.flags.model, sequence.prediction_size, sequence.keypoints, torch.cuda.is_available())
+        if self.flags.ground_truth:
+            self.pipeline = ObjectKeypointPipeline(sequence.prediction_size, sequence.keypoints, sequence.keypoint_config)
+        else:
+            self.pipeline = KeypointPipeline(self.flags.model, sequence.prediction_size, sequence.keypoints, torch.cuda.is_available(), cuda=False)
         self.pipeline.reset(sequence.K, sequence.Kp, sequence.D, sequence.Dp, sequence.T_LR, sequence.scaling_factor)
 
-        rate = Rate(60)
-        for i, ((left_frame, l_target, T_WL), (right_frame, r_target, T_WR)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
+        rate = Rate(30)
+        for i, ((left_frame, l_target, l_depth, l_centers, T_WL), (right_frame, r_target, r_depth, r_centers, T_WR)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
             N = left_frame.shape[0]
             T_LW = np.linalg.inv(T_WL.numpy())
             T_RW = np.linalg.inv(T_WR.numpy())
-            pipeline_out = self.pipeline(left_frame.cuda(), right_frame.cuda())
-
-            left_frame = left_frame.cpu().numpy()
-            right_frame = right_frame.cpu().numpy()
-
             if self.flags.ground_truth:
-                predictions_left = l_target
-                predictions_right = r_target
+                objects = self.pipeline(l_target, l_depth, l_centers, r_target, r_depth, r_centers)
+                p_left = l_target[0]
+                p_right = r_target[0]
             else:
-                predictions_left = pipeline_out['heatmap_left']
-                predictions_right = pipeline_out['heatmap_right']
+                #TODO: write actual inference pipeline
+                objects = self.pipeline(left_frame.cuda(), right_frame.cuda())
 
-            for i in range(min(left_frame.shape[0], right_frame.shape[0])):
-                print(f"Frame {self.frame_number:06}", end='\r')
-                left_rgb = self._to_image(left_frame[i])
-                right_rgb = self._to_image(right_frame[i])
-                heatmap_left = self._to_heatmap(predictions_left[i])
-                heatmap_right = self._to_heatmap(predictions_right[i])
+            left_frame = left_frame.cpu().numpy()[0]
+            right_frame = right_frame.cpu().numpy()[0]
+            left_rgb = self._to_image(left_frame)
+            right_rgb = self._to_image(right_frame)
+            heatmap_left = self._to_heatmap(l_target[0].numpy())
+            heatmap_right = self._to_heatmap(r_target[0].numpy())
+            image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
+            image_right = (0.3 * right_rgb + 0.7 * heatmap_right).astype(np.uint8)
 
-                image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
-                image_right = (0.3 * right_rgb + 0.7 * heatmap_right).astype(np.uint8)
+            points_left = []
+            points_right = []
+            for obj in objects:
+                p_LK = obj['p_L']
+                p_left = sequence.project_points_left(p_LK)
+                p_right = sequence.project_points_right(p_LK)
+                points_left.append(p_left)
+                points_right.append(p_right)
+            p_left = np.concatenate(points_left)
+            p_right = np.concatenate(points_right)
 
-                p_LK = pipeline_out['keypoints'][i]
-                p_WK = (T_WL.cpu().numpy() @ p_LK[:, :, None])[:, :, 0]
+            self.visualizer.set_left_image(image_left)
+            self.visualizer.set_right_image(image_right)
+            if self.flags.centers:
+                p_left = np.concatenate([o['centers_left'] for o in objects if o['centers_left']]) * 4.0
+                p_right = np.concatenate([o['centers_right'] for o in objects]) * 4.0
+                self.visualizer.set_left_points(p_left)
+                self.visualizer.set_right_points(p_right)
+            else:
+                self.visualizer.set_left_points(p_left)
+                self.visualizer.set_right_points(p_right)
 
-                if self.flags.write:
-                    left_points = sequence.project_points(p_WK, T_LW, sequence.K)
-                    right_points = sequence.project_points(p_WK, T_RW, sequence.Kp)
-                    self._write_frames(image_left, left_points, image_right, right_points)
-                else:
-                    left_points = sequence.to_frame_points(p_WK, T_LW)
-                    right_points = sequence.to_frame_points(p_WK, T_RW)
+            done = self.visualizer.update()
+            if done:
+                exit()
+            rate.sleep()
 
-                    self.visualizer.set_left_image(image_left)
-                    self.visualizer.set_left_points(left_points)
-                    self.visualizer.set_right_image(image_right)
-                    self.visualizer.set_right_points(right_points)
-
-                    done = self.visualizer.update()
-                    if done:
-                        exit()
-
-                    rate.sleep()
-
-                self.frame_number += 1
+            self.frame_number += 1
 
     def run(self):
         if self.flags.write:

@@ -1,9 +1,12 @@
 import numpy as np
 import torch
 import cv2
+from sklearn import cluster
 from perception.utils import camera_utils, clustering_utils, linalg
 from scipy.spatial.transform import Rotation
-
+from sklearn import metrics
+import skimage
+from scipy import ndimage
 
 class InferenceComponent:
     name = "inference"
@@ -32,64 +35,110 @@ class InferenceComponent:
 
 class KeypointExtractionComponent:
     name = "keypoints"
-    PROBABILITY_CUTOFF = 0.25
+    PROBABILITY_CUTOFF = 0.5
 
-    def __init__(self, K, prediction_size):
-        self.K = K
-        self.reset()
+    def __init__(self, keypoint_config, prediction_size):
+        # Add center point.
+        self.keypoint_config = [1] + keypoint_config['keypoint_config']
+        self.n_keypoints = sum(self.keypoint_config)
         prediction_size = prediction_size
         self.indices = np.zeros((*prediction_size, 2), dtype=np.float32)
         for y in range(prediction_size[0]):
             for x in range(prediction_size[1]):
                 self.indices[y, x, 0] = np.float32(x) + 0.5
                 self.indices[y, x, 1] = np.float32(y) + 0.5
+        self.clustering = clustering_utils.KeypointClustering(bandwidth=2.5)
+        self.kernel = np.ones((5, 5)) / 25.0
+        self.kernel[2, 2] = 0.0
 
-    def reset(self):
-        self.clustering_left = clustering_utils.KeypointClustering(self.K, 10.0)
-        self.clustering_right = clustering_utils.KeypointClustering(self.K, 10.0)
+    def _cluster(self, heatmap):
+        indices = self.indices[heatmap > self.PROBABILITY_CUTOFF]
+        if indices.shape[0] == 0:
+            return []
+        out = [x for x in self.clustering(indices)]
+        return out
 
-    def _extract_keypoints(self, heatmap, clustering):
-        keypoints = np.zeros((1 + self.K, 2), dtype=heatmap.dtype)
-        cv2.resize(heatmap,
-        # Center point
-        center_point = heatmap[0]
-        where_larger = center_point > self.PROBABILITY_CUTOFF
-        left_center = self.indices[where_larger, :]
-        probabilities_center = center_point[where_larger]
-        probabilities_center /= probabilities_center.sum()
-        keypoints[0, :] = (left_center * probabilities_center[:, None]).sum(axis=0)
+    def _extract_keypoints(self, heatmap):
+        out_points = []
+        assert heatmap.shape[0] == len(self.keypoint_config)
+        for i, n_keypoints in enumerate(self.keypoint_config):
+            points = self._cluster(heatmap[i])
+            out_points.append(points)
+        return out_points
 
-        # Three spoke points.
-        spokes = heatmap[1]
-        where_larger = spokes > self.PROBABILITY_CUTOFF
-        spoke_indices = self.indices[where_larger, :]
-        probabilities_spoke = spokes[where_larger]
+    @staticmethod
+    def _preprocess_heatmap(heatmap):
+        out = heatmap.copy().astype(np.float32)
+        out[heatmap > 0.75] = 1.0
+        return out * 2.0
 
-        clusters = clustering(spoke_indices, probabilities_spoke)
+    def _points(self, heatmap):
+        out_points = []
+        heatmap_processed = self._preprocess_heatmap(heatmap)
 
-        keypoints[1 : 1 + clusters.shape[0], :] = clusters
-        return keypoints
+        for i, n_keypoints in enumerate(self.keypoint_config):
+            # convolved = cv2.filter2D(heatmap[i], -1, self.kernel)
+            # convolved[convolved < self.PROBABILITY_CUTOFF] = 0.0
+            image_max = ndimage.maximum_filter(heatmap_processed[i], size=1, mode='constant')
+            points = skimage.feature.peak_local_max(image_max, min_distance=5,
+                    threshold_abs=self.PROBABILITY_CUTOFF * 2.0, p_norm=1)
+            # from matplotlib import pyplot
+            # pyplot.imshow(image_max)
+            # pyplot.scatter(points[:, 1], points[:, 0], alpha=0.5, c='red')
+            # pyplot.show()
+            # print(points.shape)
+            # points = points[:, ::-1] + 0.5
+            out_points.append(points[:, ::-1] + 1.0)
+        return out_points
 
     def __call__(self, left, right):
         N = left.shape[0]
 
-        keypoints = np.zeros((2, N, self.K, 2), dtype=left.dtype)
+        keypoints_left = []
+        keypoints_right = []
         for i in range(left.shape[0]):
-            keypoints[0, i] = self._extract_keypoints(left[i], self.clustering_left)
-            keypoints[1, i] = self._extract_keypoints(right[i], self.clustering_right)
+            keypoints_left.append(self._points(left[i]))
+            keypoints_right.append(self._points(right[i]))
 
-        return keypoints[0], keypoints[1]
+        return keypoints_left, keypoints_right
 
+def _get_depth(xy, depth):
+    indices = np.argwhere(depth)
+    try:
+        yx = xy[:, ::-1]
+    except IndexError:
+        import ipdb; ipdb.set_trace()
+    distances = np.linalg.norm(indices - yx[:, None], axis=2)
+    depth_index = indices[distances.argmin(axis=1)]
+    return depth[depth_index[:, 0], depth_index[:, 1]]
 
-class TriangulationComponent:
-    name = "association"
+def project_3d(points, depth, K):
+    xys = points.round().astype(np.int32)
+    zs = _get_depth(xys, depth[1:])
+    p_W = np.zeros((points.shape[0], 3))
+    p_W[:, 0] = (points[:, 0] - K[0, 2]) * zs / K[0, 0]
+    p_W[:, 1] = (points[:, 1] - K[1, 2]) * zs / K[1, 1]
+    p_W[:, 2] = zs
+    return p_W
 
-    def __init__(self, n_points):
-        self.n_points = n_points
+    # for i, point in enumerate(keypoints):
+    #     xy = point.round().astype(np.int32)
+    #     z = self._get_depth(xy, left_depth[heatmap])
+    #     p_W = np.ones((3,))
+    #     p_W[0] = (point[0] - self.K[0, 2]) * z / self.K[0, 0]
+    #     p_W[1] = (point[1] - self.K[1, 2]) * z / self.K[1, 1]
+    #     p_W[2] = z
+    #     R, _ = cv2.Rodrigues(self.T_RL[:3, :3])
+    #     x_p, _ = cv2.fisheye.projectPoints(p_W[None, None, :], R, self.T_RL[:3, 3], self.Kp, self.Dp)
+    #     right_points[i] = x_p.ravel()
+
+class AssociationComponent:
+    def __init__(self):
         self.K = None
+        self.D = None
         self.Kp = None
+        self.Dp = None
         self.T_RL = None
-        self.scaling_factor = None
         self.F = None
 
     def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
@@ -98,51 +147,92 @@ class TriangulationComponent:
         self.D = D
         self.Dp = Dp
         self.T_RL = T_RL.astype(np.float32)
-        R = self.T_RL[:3, :3]
-        t = self.T_RL[:3, 3]
-        Kp_inv = np.linalg.inv(self.Kp)
+        self.Kinv = np.linalg.inv(K)
+        self.Kpinv = np.linalg.inv(Kp)
 
-        C = linalg.skew_matrix(self.K @ R.T @ t)
-        self.F = Kp_inv.T @ R @ self.K.T @ C
-        self.scaling_factor = scaling_factor
+    def __call__(self, left_keypoints, left_depth, right_keypoints, right_depth):
+        for heatmap, keypoints in enumerate(left_keypoints):
+            if len(right_keypoints[heatmap]) == 0:
+                continue
+            p_W = project_3d(keypoints, left_depth[heatmap], self.K)
+            R, _ = cv2.Rodrigues(self.T_RL[:3, :3])
+            x_p, _ = cv2.fisheye.projectPoints(p_W[:, None], R, self.T_RL[:3, 3], self.Kp, self.Dp)
+            assert x_p.shape[1] == 1
+            right_points = x_p[:, 0, :]
+            found_right_points = np.stack(right_keypoints[heatmap])
+            distances = metrics.pairwise_distances(found_right_points, right_keypoints[heatmap])
+            right_keypoints[heatmap][distances.argmin(axis=1)]
 
-    def _associate(self, left_keypoints, right_keypoints):
-        distances = np.zeros(
-            (left_keypoints.shape[0], right_keypoints.shape[0]),
-            dtype=left_keypoints.dtype,
-        )
-        one = np.ones((1,), dtype=left_keypoints.dtype)
-        for i in range(left_keypoints.shape[0]):
-            v1 = np.concatenate([left_keypoints[i, :], one], axis=0)[:, None]
-            for j in range(right_keypoints.shape[0]):
-                v2 = np.concatenate([right_keypoints[j, :], one], axis=0)[:, None]
-                distances[i, j] = np.abs(v2.T @ self.F @ v1)
-        return distances.argmin(axis=1)
+class TriangulationComponent:
+    name = "triangulation"
 
-    def _triangulate(self, left_keypoints, right_keypoints):
-        associations = self._associate(left_keypoints, right_keypoints)
-        # Permute keypoints into the same order as left.
-        right_keypoints = right_keypoints[associations]
+    def __init__(self):
+        self.K = None
+        self.Kp = None
+        self.D = None
+        self.Dp = None
+        self.T_RL = None
 
-        left_keypoints = cv2.undistortPoints(left_keypoints.T.astype(np.float32), self.K, self.D)[:, 0, :]
-        right_keypoints = cv2.undistortPoints(right_keypoints.T.astype(np.float32), self.Kp, self.Dp)[:, 0, :]
-        P1 = np.eye(3, 4, dtype=np.float32)
-        P2 = self.T_RL[:3].astype(np.float32)
+    def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
+        self.K = camera_utils.scale_camera_matrix(K, 1.0 / scaling_factor)
+        self.Kp = camera_utils.scale_camera_matrix(Kp, 1.0 / scaling_factor)
+        self.D = D
+        self.Dp = Dp
+        self.T_RL = T_RL
+
+    def __call__(self, left_keypoints, right_keypoints):
+        try:
+            left_keypoints = left_keypoints[:, None, :].astype(np.float32)
+            right_keypoints = right_keypoints[:, None, :].astype(np.float32)
+        except IndexError as e:
+            import ipdb; ipdb.set_trace()
+        left_keypoints = cv2.fisheye.undistortPoints(left_keypoints, self.K, self.D, P=self.K)[:, 0, :]
+        right_keypoints = cv2.fisheye.undistortPoints(right_keypoints, self.Kp, self.Dp, P=self.Kp)[:, 0, :]
+        P1 = self.K @ np.eye(3, 4, dtype=np.float32)
+        P2 = self.Kp @ self.T_RL[:3].astype(np.float32)
         p_LK = cv2.triangulatePoints(
             P1, P2, left_keypoints.T, right_keypoints.T
         ).T  # N x 4
 
         p_LK = p_LK / p_LK[:, 3:4]
-        return p_LK
+        return p_LK[:, :3]
 
-    def __call__(self, left_keypoints, right_keypoints):
-        N = left_keypoints.shape[0]
-        out_points = np.zeros((N, self.n_points, 4), dtype=np.float32)
-        for i in range(left_keypoints.shape[0]):
-            out_points[i, :, :] = self._triangulate(
-                left_keypoints[i], right_keypoints[i]
-            )
-        return out_points
+class ObjectExtraction:
+    def __init__(self, keypoint_config):
+        self.keypoint_config = keypoint_config
+        self.prediction_size = [180, 320]
+        self.max = np.array(self.prediction_size[::-1], dtype=np.int32) - 1
+        self.min = np.zeros(2, dtype=np.int32)
+        self.image_indices = np.zeros((*self.prediction_size, 2))
+        for i in range(self.prediction_size[0]):
+            for j in range(self.prediction_size[1]):
+                self.image_indices[i, j] = (j + 0.5, i + 0.5)
+
+    def __call__(self, keypoints, centers):
+        centers = self.image_indices + centers.transpose([1, 2, 0])
+        objects = []
+        center_points = np.stack(keypoints[0])
+        for center in center_points:
+            obj = { 'center': center, 'heatmap_points': [], 'p_centers': [] }
+            obj['heatmap_points'] = [[] for _ in range((len(keypoints) - 1))]
+            objects.append(obj)
+        for i, points in enumerate(keypoints[1:]):
+            points_of_type = np.stack(points)
+            for point in points:
+                xy = np.clip(point.round().astype(np.int32), self.min, self.max)
+                predicted_center = centers[xy[1], xy[0], :]
+                distance_to_centers = np.linalg.norm(center_points - predicted_center, axis=1)
+                obj = objects[distance_to_centers.argmin(axis=0)]
+                obj['p_centers'].append(predicted_center)
+                obj['heatmap_points'][i].append(point)
+        for obj in objects:
+            for i in range(len(obj['heatmap_points'])):
+                if len(obj['heatmap_points'][i]) > 0:
+                    obj['heatmap_points'][i] = np.stack(obj['heatmap_points'][i])
+                else:
+                    # Keypoint was associated with the wrong object.
+                    obj['heatmap_points'][i] = np.array([])
+        return objects
 
 class PnPComponent:
     def __init__(self, points_3d):
@@ -200,8 +290,9 @@ class PnPComponent:
 
 class PoseSolveComponent:
     def __init__(self, points_3d):
-        self.points_3d = points_3d
-        self.points_3d[1:] = sorted(self.points_3d[:1], key=lambda v: v[2])
+        self.points_3d = np.zeros((points_3d.shape[0] + 1, 3))
+        self.points_3d[0] = points_3d.mean(axis=0)
+        self.points_3d[1:] = points_3d
 
     def __call__(self, keypoints):
         keypoints = keypoints[:, :, :3]
@@ -220,15 +311,93 @@ class PoseSolveComponent:
             T[i, :3, :3] = rotation.as_matrix()
         return T
 
+class ObjectKeypointPipeline:
+    def __init__(self, prediction_size, points_3d, keypoint_config):
+        self.keypoint_extraction = KeypointExtractionComponent(keypoint_config, prediction_size)
+        self.object_extraction = ObjectExtraction(keypoint_config)
+        self.association = AssociationComponent()
+        self.triangulation = TriangulationComponent()
+        self.K = self.Kp = self.D = self.Dp = self.T_RL = None
+
+    def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
+        self.K = camera_utils.scale_camera_matrix(K, 1.0 / scaling_factor)
+        self.Kp = camera_utils.scale_camera_matrix(Kp, 1.0 / scaling_factor)
+        self.D = D
+        self.Dp = Dp
+        self.T_RL = T_RL
+        self.T_LR = np.linalg.inv(T_RL)
+        self.association.reset(K, Kp, D, Dp, T_RL, scaling_factor)
+        self.triangulation.reset(K, Kp, D, Dp, T_RL, scaling_factor)
+
+    def _recover_from_left(self, depth, left, right):
+        print("Recovering right points from left.")
+        p_W = project_3d(left, depth, self.K)
+        T_CW = self.T_RL
+        R, _ = cv2.Rodrigues(T_CW[:3, :3])
+        x_p, _ = cv2.fisheye.projectPoints(p_W[:, None], R, T_CW[:3, 3], self.Kp, self.Dp)
+        return x_p[:, 0, :]
+
+    def _recover_from_right(self, depth, left, right):
+        print("Recovering left points from right.")
+        #TODO: some points might be ok. Only recover the missing ones.
+        p_W = project_3d(right, depth, self.Kp)
+        T_CW = self.T_LR
+        R, _ = cv2.Rodrigues(T_CW[:3, :3])
+        x, _ = cv2.fisheye.projectPoints(p_W[:, None], R, T_CW[:3, 3], self.K, self.D)
+        return x[:, 0, :]
+
+    def __call__(self, heatmap_left, depth_left, centers_left, heatmap_right, depth_right, centers_right):
+        assert heatmap_left.shape[0] == 1, "One at the time, please."
+        depth_left = depth_left[0].numpy()
+        depth_right = depth_right[0].numpy()
+        heatmap_left = heatmap_left.numpy()
+        heatmap_right = heatmap_right.numpy()
+        left_points, right_points = self.keypoint_extraction(heatmap_left, heatmap_right)
+        left_points, right_points = left_points[0], right_points[0]
+        objects_left = self.object_extraction(left_points, centers_left[0].numpy())
+        objects_right = self.object_extraction(right_points, centers_right[0].numpy())
+        objects = []
+        for object_left, object_right in zip(objects_left, objects_right):
+            for i, (left, right) in enumerate(zip(object_left['heatmap_points'], object_right['heatmap_points'])):
+                if len(left) == 0 and len(right) == 0:
+                    # Both keypoints where not extracted. This is ignored further down the pipeline.
+                    continue
+
+                if len(left) > len(right):
+                    # Some keypoints were not appropriately detected in both frames.
+                    object_right['heatmap_points'][i] = self._recover_from_left(depth_left[1 + i], left, right)
+                elif len(right) > len(left):
+                    object_left['heatmap_points'][i] = self._recover_from_right(depth_right[1 + i], left, right)
+
+            self.association(object_left['heatmap_points'], depth_left,
+                    object_right['heatmap_points'], depth_right)
+            world_points = [self.triangulation(object_left['center'][None], object_right['center'][None])]
+            for i in range(len(object_left['heatmap_points'])):
+                if len(object_left['heatmap_points'][i]) == 0:
+                    continue
+                p_W = self.triangulation(object_left['heatmap_points'][i], object_right['heatmap_points'][i])
+                world_points.append(p_W)
+            objects.append({
+                'centers_left': object_left['p_centers'],
+                'centers_right': object_right['p_centers'],
+                'keypoints_left': [object_left['center']] + object_left['heatmap_points'],
+                'keypoints_right': [object_right['center']] + object_right['heatmap_points'],
+                'p_L': world_points
+            })
+        return objects
+
+
 class KeypointPipeline:
-    def __init__(self, model, prediction_size, points_3d, cuda):
+    def __init__(self, model, prediction_size, points_3d, keypoint_config, cuda):
         self.inference = InferenceComponent(model, cuda)
         self.keypoint_extraction = KeypointExtractionComponent(points_3d.shape[0]-1, prediction_size)
+        self.assocation = AssociationComponent(keypoint_config)
         self.triangulation = TriangulationComponent(points_3d.shape[0])
         self.pose_solve = PoseSolveComponent(points_3d)
 
     def reset(self, K, Kp, D, Dp, T_RL, scaling_factor):
         self.keypoint_extraction.reset()
+        self.association.reset(K, Kp, D, Dp, T_RL, scaling_factor)
         self.triangulation.reset(K, Kp, D, Dp, T_RL, scaling_factor)
 
     def __call__(self, left, right):

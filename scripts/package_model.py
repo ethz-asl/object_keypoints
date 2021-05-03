@@ -1,25 +1,31 @@
 import argparse
 import os
 import torch
+import json
 from train import KeypointModule
 
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str)
     parser.add_argument('--out', type=str)
+    parser.add_argument('--keypoint-config', type=str, default='./config/cups.json')
     return parser.parse_args()
 
 class Model(torch.nn.Module):
-    def __init__(self, model):
+    def __init__(self, flags):
         super().__init__()
-        self.model = KeypointModule.load_from_checkpoint(model).model
+        with open(flags.keypoint_config) as f:
+            keypoint_config = json.load(f)
+        self.model = KeypointModule.load_from_checkpoint(flags.model,
+                keypoint_config=keypoint_config).model
 
     def forward(self, x):
-        return torch.sigmoid(self.model(x))
+        heatmap, depth, centers = self.model(x)
+        return torch.sigmoid(heatmap), depth, centers
 
 def main():
     flags = read_args()
-    model = Model(flags.model).eval().half().cuda()
+    model = Model(flags).eval().half().cuda()
 
     dummy_input = torch.randn(2, 3, 360, 640).half().cuda()
     input_names = ["frames"]
