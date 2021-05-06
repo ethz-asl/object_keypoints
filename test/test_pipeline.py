@@ -33,6 +33,10 @@ points_right_distinct = np.array([[680.43097119, 368.90194905],
     [750.85353605, 368.91588343],
     [612.46064648, 368.88886675]]) * scaling_factor
 
+keypoints_X = np.array([[0.0, 0.0, 1.0],
+    [0.0, 0.25, 1.0],
+    [0.0, -0.25, 1.0]])
+
 def compute_heatmaps(keypoints, keypoint_config, T_LW, T_RW, K, D, Kp, Dp):
     config = [1] + keypoint_config['keypoint_config']
     heatmap_left = np.zeros((len(config), StereoVideoDataset.height, StereoVideoDataset.width))
@@ -56,6 +60,14 @@ def compute_heatmaps(keypoints, keypoint_config, T_LW, T_RW, K, D, Kp, Dp):
     heatmap_left /= heatmap_left.max()
     heatmap_right /= heatmap_right.max()
     return heatmap_left, heatmap_right, p_L, p_R
+
+def compute_depth(image_points, keypoints, T_CW):
+    depth_map = np.zeros((180, 320))
+    for point, X in zip(image_points, keypoints):
+        xy = point.round().astype(np.int32)
+        depth_map[xy[1]-5:xy[1]+5, xy[0]-5:xy[0]] = np.linalg.norm(T_CW @ np.concatenate([X, np.ones(1)]), axis=0)
+    return depth_map
+
 
 class PipelineTest(unittest.TestCase):
     @classmethod
@@ -149,31 +161,16 @@ class PipelineTest(unittest.TestCase):
             np.testing.assert_array_less(distances_left, np.ones(distances_left.shape) * 0.5)
             np.testing.assert_array_less(distances_right, np.ones(distances_left.shape) * 0.5)
 
-    def test_association(self):
-        p_L = points_left_distinct.copy()
-        p_R = points_right_distinct.copy()
-        for _ in range(5):
-            shuffled = p_R.copy()
-            np.random.shuffle(shuffled)
-            association = AssociationComponent()
-            association.reset(self.K, self.Kp, self.D, self.Dp, self.T_LR,
-                    1.0 / np.array([scaling_factor, scaling_factor]))
-            left, right = association(p_L, shuffled)
-            np.testing.assert_equal(p_L, left)
-            # Should be subpixel error.
-            # Some points might be associated to the same points if they are very close to each other.
-            np.testing.assert_array_less(np.linalg.norm(p_R - right, axis=1), 1.0)
-
     def test_triangulation(self):
         p_L = points_left_distinct.copy()
         p_R = points_right_distinct.copy()
         triangulation = TriangulationComponent()
         triangulation.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL,
                 1.0 / np.array([scaling_factor, scaling_factor]))
-        p_W = triangulation(p_L[None], p_R[None])[0]
+        p_W = triangulation(p_L, p_R)
         np.testing.assert_array_less(np.linalg.norm(p_W - self.keypoints_distinct, axis=1), 1e-5)
 
-    def test_full_pipeline(self):
+    def test_extraction_plus_triangulation(self):
         T_LW = np.eye(4)
         T_RW = self.T_RL @ T_LW
         heatmap_left, heatmap_right, p_L, p_R = compute_heatmaps(self.keypoints_two_kinds, config_two_kinds,
@@ -187,29 +184,58 @@ class PipelineTest(unittest.TestCase):
         association = AssociationComponent()
         triangulation = TriangulationComponent()
         pose_solve = PoseSolveComponent(keypoints_distinct)
-        association.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL, np.ones(2) / scaling_factor)
         triangulation.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL, np.ones(2) / scaling_factor)
         left, right = keypoint_extraction(prediction_left[None], prediction_right[None])
         left, right = left[0], right[0]
         points = []
         for i in range(len(left)):
-            left_points, right_points = association(np.stack(left[i]), np.stack(right[i]))
-            points.append(triangulation(left_points[None], right_points[None])[0])
+            left_points, right_points = np.stack(left[i]), np.stack(right[i])
+            points.append(triangulation(left_points, right_points))
         self.assertEqual(points[0].shape, (1, 3))
         self.assertEqual(points[1].shape, (1, 3))
         self.assertEqual(points[2].shape, (3, 3))
         self.assertLess(np.linalg.norm(points[0][0] - self.keypoints_two_kinds[0]), 5e-2)
         self.assertLess(np.linalg.norm(points[1][0] - self.keypoints_two_kinds[1]), 5e-2)
-        distances = sklearn.metrics.pairwise_distances(points[2], self.keypoints_two_kinds[2:]).min(axis=1)
-        print(distances)
-        left = np.stack(left[2])
-        right = np.stack(right[2])
-        from matplotlib import pyplot
-        pyplot.imshow(prediction_right[2])
-        pyplot.scatter(right_points[:, 0] - 0.5, right_points[:, 1] - 0.5, alpha=0.5, c='red')
-        pyplot.show()
 
-    def test_object_association(self, )
+    def test_association_simple(self):
+        T_LW = np.eye(4)
+        T_RW = self.T_RL @ T_LW
+        T_WR = np.linalg.inv(T_RW)
+        R, _ = cv2.Rodrigues(T_LW[:3, :3])
+        points_left, _ = cv2.fisheye.projectPoints(keypoints_X[:, None, :], R, T_LW[:3, 3], self.K, self.D)
+        points_left = points_left.reshape(-1, 2) * 0.25
+        R_r, _ = cv2.Rodrigues(T_WR[:3, :3])
+        points_right, _ = cv2.fisheye.projectPoints(keypoints_X[:, None, :], R_r, T_WR[:3, 3], self.Kp, self.Dp)
+        points_right = points_right.reshape(-1, 2) * 0.25
+        depth_left = compute_depth(points_left, keypoints_X, T_LW)
+        depth_right = compute_depth(points_right, keypoints_X, T_RW)
+        association = AssociationComponent()
+        association.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL, np.ones(2) / scaling_factor)
+        for _ in range(5):
+            shuffled_right = points_right.copy()
+            np.random.shuffle(shuffled_right)
+            associations = association(points_left, depth_left, shuffled_right, depth_right)
+            self.assertTrue((associations != -1).all())
+            np.testing.assert_equal(points_right, shuffled_right[associations])
+
+    def test_association_two_same(self):
+        points_left = np.array([[160.251929, 92.04110211],
+            [160.251929, 135.25386897],
+            [160.251929, 48.82833525]])
+        points_right = np.array([[149.9327, 139.14128],
+            [149.93279695, 133.14128143],
+            [149.88808034, 47.08818382]])
+        T_LW = np.eye(4)
+        T_RW = self.T_RL @ T_LW
+        depth_left = compute_depth(points_left, keypoints_X, T_LW)
+        depth_right = compute_depth(points_right, keypoints_X, T_RW)
+        association = AssociationComponent()
+        association.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL, np.ones(2) / scaling_factor)
+        associations = association(points_left, depth_left, points_right, depth_right)
+        self.assertEqual(associations[0], -1)
+        self.assertEqual(associations[1], 1)
+        self.assertEqual(associations[2], 2)
+
 
 
 if __name__ == "__main__":

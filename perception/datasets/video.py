@@ -240,16 +240,20 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
     def _compute_centers(self, projected_keypoints):
         scaling_factor = float(self.target_size[0] / self.image_size[0])
         projected_keypoints = projected_keypoints * scaling_factor
-        centers = np.zeros((2, *self.target_size), dtype=np.float32)
+        center_map = np.zeros((self.keypoint_maps - 1, 2, *self.target_size), dtype=np.float32)
+
+        keypoints = projected_keypoints.reshape(self.n_objects, self.n_keypoints, 2)
+
         for object_index in range(self.n_objects):
-            center_keypoint = projected_keypoints[object_index * self.n_keypoints]
+            center_keypoint = keypoints[object_index, 0]
             center_vectors = (center_keypoint[:, None, None] - self.target_pixel_indices)
             for i in range(1, self.n_keypoints):
-                keypoint = projected_keypoints[object_index * self.n_keypoints + i]
-                distance_to_keypoint = np.linalg.norm(keypoint[:, None, None] - self.target_pixel_indices, axis=0)
-                within_range = distance_to_keypoint < 10.0
-                centers[:, within_range] = center_vectors[:, within_range]
-        return centers
+                current_keypoint = keypoints[object_index, i, :]
+                distance_to_keypoint = np.linalg.norm(current_keypoint[:, None, None] - self.target_pixel_indices, axis=0)
+                within_range = distance_to_keypoint < 8.0
+
+                center_map[i-1][:, within_range] = center_vectors[:, within_range]
+        return center_map
 
     @staticmethod
     def to_image(image):

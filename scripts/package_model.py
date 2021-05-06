@@ -21,13 +21,14 @@ class Model(torch.nn.Module):
 
     def forward(self, x):
         heatmap, depth, centers = self.model(x)
-        return torch.sigmoid(heatmap), depth, centers
+        N, D, H, W = centers.shape
+        return torch.sigmoid(heatmap), depth, centers.reshape(N, D // 2, 2, H, W)
 
 def main():
     flags = read_args()
-    model = Model(flags).eval().half().cuda()
+    model = Model(flags).eval().cpu()
 
-    dummy_input = torch.randn(2, 3, 360, 640).half().cuda()
+    dummy_input = torch.randn(2, 3, 360, 640)
     input_names = ["frames"]
     output_names = ["out"]
 

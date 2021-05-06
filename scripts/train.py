@@ -31,6 +31,9 @@ def _to_image(image):
     image = image + np.array([0.5, 0.5, 0.5])
     return np.clip((image * 255.0).round(), 0.0, 255.0).astype(np.uint8)
 
+def _init_worker(worker_id):
+    np.random.seed(worker_id)
+
 class KeypointModule(pl.LightningModule):
     def __init__(self, keypoint_config):
         super().__init__()
@@ -98,8 +101,7 @@ class DataModule(pl.LightningDataModule):
         if stage == 'fit':
             train_datasets = []
             for camera in [0, 1]:
-                for augment in [False, True]:
-                    train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=augment, camera=camera)
+                train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=True, camera=camera)
             val_datasets = (_build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False) +
                     _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, camera=1))
             self.train = SamplingPool(Chain(train_datasets, shuffle=True, infinite=True), self.flags.pool)
@@ -109,6 +111,7 @@ class DataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train, batch_size=self.flags.batch_size, num_workers=self.flags.workers,
+                worker_init_fn=_init_worker,
                 persistent_workers=self.flags.workers > 0)
 
     def val_dataloader(self):

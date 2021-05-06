@@ -6,6 +6,7 @@ import json
 import cv2
 import torch
 import numpy as np
+import random
 from torch.utils.data import DataLoader
 from perception.datasets.video import StereoVideoDataset
 from perception.utils import Rate, camera_utils, clustering_utils, linalg
@@ -23,6 +24,9 @@ def read_args():
     parser.add_argument('--ground-truth', action='store_true', help="Show labels instead of making predictions.")
     parser.add_argument('--keypoints', type=str, default='config/cups.json', help="The keypoint configuration file.")
     parser.add_argument('--write', type=str, help="Write frames to folder.")
+    parser.add_argument('--cpu', action='store_true', help='Run model on cpu.')
+    parser.add_argument('--world', action='store_true', help='Project points from world points.')
+    parser.add_argument('--seed', type=int, default=0, help="Random seed.")
     return parser.parse_args()
 FULL_IMAGE_SIZE = hud.Rect(0.0, 0.0, 1280.0, 720.0)
 class Sequence:
@@ -42,7 +46,7 @@ class Sequence:
         self.scaling_factor = np.array(self.image_size[::-1]) / np.array(self.prediction_size[::-1])
 
     def _loader(self, dataset):
-        return DataLoader(dataset, num_workers=1, batch_size=1, pin_memory=True)
+        return DataLoader(dataset, num_workers=1, batch_size=1, pin_memory=not self.flags.cpu and torch.cuda.is_available())
 
     def _read_keypoints(self):
         filepath = os.path.join(self.sequence_path, 'keypoints.json')
@@ -79,8 +83,14 @@ class Sequence:
         return (image_points / image_points[:, 2:3])[:, :2]
 
 
-def _point_colors(n):
-    return cm.jet(np.linspace(0.0, 1.0, n))
+object_color_maps = [cm.get_cmap('Reds'), cm.get_cmap('Purples'), cm.get_cmap('Greens'), cm.get_cmap('Blues'), cm.get_cmap('Oranges')]
+n_colormaps = len(object_color_maps)
+def _point_colors(object_points):
+    # Color per object.
+    colors = []
+    for i, points in enumerate(object_points):
+        colors.append(object_color_maps[i % n_colormaps](np.linspace(0.7, 0.9, points.shape[0])))
+    return np.concatenate(colors)
 
 class Visualizer:
     def __init__(self):
@@ -119,20 +129,21 @@ class Visualizer:
         self.right_image_pane.set_texture(image)
 
     def set_left_points(self, points):
-        colors = _point_colors(points.shape[0])
+        colors = _point_colors(points)
+        points = np.concatenate(points)
         points = self._to_hud_points(points)
         hud_points = [hud.utils.to_normalized_device_coordinates(p, FULL_IMAGE_SIZE) for p in points]
         self.left_points.set_points(hud_points, colors)
 
     def set_right_points(self, points):
-        colors = _point_colors(points.shape[0])
+        colors = _point_colors(points)
+        points = np.concatenate(points)
         points = self._to_hud_points(points)
         points = [hud.utils.to_normalized_device_coordinates(p, FULL_IMAGE_SIZE) for p in points]
         self.right_points.set_points(points, colors)
 
     def _to_hud_points(self, points):
-        points = [hud.Point(p[0], p[1]) for p in points]
-        return sorted(points, key=lambda p: p.y)
+        return [hud.Point(p[0], p[1]) for p in points]
 
     def update(self):
         self.window.poll_events()
@@ -149,7 +160,7 @@ class Runner:
             self.figure = None
         else:
             self.visualizer = None
-            self.figure = pyplot.figure(figsize=(16, 4.5))
+            self.figure = pyplot.figure(figsize=(14, 8))
         self.frame_number = 0
         self.pipeline = None
 
@@ -171,11 +182,13 @@ class Runner:
         y_scaling = left.shape[0] / 720.0
         axis = pyplot.subplot2grid((1, 2), loc=(0, 0), fig=self.figure)
         axis.imshow(left)
-        axis.scatter(left_points[:, 0] * x_scaling, left_points[:, 1] * y_scaling, s=5.0, color='y')
+        c = _point_colors(left_points.shape[0])
+        axis.scatter(left_points[:, 0] * x_scaling, left_points[:, 1] * y_scaling, s=5.0, color=c)
         axis.axis('off')
         axis = pyplot.subplot2grid((1, 2), loc=(0, 1), fig=self.figure)
         axis.imshow(right)
-        axis.scatter(right_points[:, 0] * x_scaling, right_points[:, 1] * y_scaling, s=5.0, color='y')
+        c = _point_colors(right_points.shape[0])
+        axis.scatter(right_points[:, 0] * x_scaling, right_points[:, 1] * y_scaling, s=5.0, color=c)
         axis.axis('off')
         self.figure.savefig(os.path.join(self.flags.write, f'{self.frame_number:06}.jpg'), pil_kwargs={'quality': 85}, bbox_inches='tight')
         self.figure.clf()
@@ -184,21 +197,19 @@ class Runner:
         if self.flags.ground_truth:
             self.pipeline = ObjectKeypointPipeline(sequence.prediction_size, sequence.keypoints, sequence.keypoint_config)
         else:
-            self.pipeline = KeypointPipeline(self.flags.model, sequence.prediction_size, sequence.keypoints, torch.cuda.is_available(), cuda=False)
+            self.pipeline = LearnedKeypointTrackingPipeline(self.flags.model, not self.flags.cpu and torch.cuda.is_available(),
+                    sequence.prediction_size, sequence.keypoints, sequence.keypoint_config)
         self.pipeline.reset(sequence.K, sequence.Kp, sequence.D, sequence.Dp, sequence.T_LR, sequence.scaling_factor)
 
         rate = Rate(30)
         for i, ((left_frame, l_target, l_depth, l_centers, T_WL), (right_frame, r_target, r_depth, r_centers, T_WR)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
             N = left_frame.shape[0]
-            T_LW = np.linalg.inv(T_WL.numpy())
-            T_RW = np.linalg.inv(T_WR.numpy())
             if self.flags.ground_truth:
                 objects = self.pipeline(l_target, l_depth, l_centers, r_target, r_depth, r_centers)
                 p_left = l_target[0]
                 p_right = r_target[0]
             else:
-                #TODO: write actual inference pipeline
-                objects = self.pipeline(left_frame.cuda(), right_frame.cuda())
+                objects = self.pipeline(left_frame, right_frame)
 
             left_frame = left_frame.cpu().numpy()[0]
             right_frame = right_frame.cpu().numpy()[0]
@@ -211,38 +222,43 @@ class Runner:
 
             points_left = []
             points_right = []
-            for obj in objects:
-                p_LK = obj['p_L']
-                p_left = sequence.project_points_left(p_LK)
-                p_right = sequence.project_points_right(p_LK)
-                points_left.append(p_left)
-                points_right.append(p_right)
-            p_left = np.concatenate(points_left)
-            p_right = np.concatenate(points_right)
-
-            self.visualizer.set_left_image(image_left)
-            self.visualizer.set_right_image(image_right)
             if self.flags.centers:
-                p_left = np.concatenate([o['centers_left'] for o in objects if o['centers_left']]) * 4.0
-                p_right = np.concatenate([o['centers_right'] for o in objects]) * 4.0
-                self.visualizer.set_left_points(p_left)
-                self.visualizer.set_right_points(p_right)
+                for obj in objects:
+                    points_left.append(np.concatenate([c[None] * 4.0 for c in obj['centers_left']]))
+                    points_right.append(np.concatenate([c[None] * 4.0 for c in obj['centers_right']]))
             else:
-                self.visualizer.set_left_points(p_left)
-                self.visualizer.set_right_points(p_right)
+                for obj in objects:
+                    if self.flags.world:
+                        p_LK = [p for p in obj['p_L'] if p is not None]
+                        p_left = sequence.project_points_left(p_LK)
+                        p_right = sequence.project_points_right(p_LK)
+                    else:
+                        p_left = np.concatenate([p * 4.0 for p in obj['keypoints_left'] if p.size != 0], axis=0)
+                        p_right = np.concatenate([p * 4.0 for p in obj['keypoints_right'] if p.size != 0], axis=0)
+                    points_left.append(p_left)
+                    points_right.append(p_right)
 
-            done = self.visualizer.update()
-            if done:
-                exit()
+            if self.flags.write is not None:
+                self._write_frames(image_left, points_left, image_right, points_right)
+            else:
+                self.visualizer.set_left_image(image_left)
+                self.visualizer.set_right_image(image_right)
+                self.visualizer.set_left_points(points_left)
+                self.visualizer.set_right_points(points_right)
+
+                done = self.visualizer.update()
+                if done:
+                    exit()
             rate.sleep()
 
             self.frame_number += 1
 
     def run(self):
+        random.seed(self.flags.seed)
+
         if self.flags.write:
             os.makedirs(self.flags.write, exist_ok=True)
         sequences = self._sequences()
-        import random
         random.shuffle(sequences)
         for sequence in sequences:
             sequence = Sequence(self.flags, sequence)

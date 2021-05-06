@@ -10,6 +10,7 @@ class CenterHead(nn.Module):
         super().__init__()
         self.output_size = output_size
         self.layers = nn.Sequential(
+                nn.Dropout2d(p=0.1),
                 nn.Conv2d(in_channels, 32, kernel_size=3, dilation=2, padding=2, bias=False),
                 nn.BatchNorm2d(32),
                 nn.ReLU(inplace=True))
@@ -33,16 +34,18 @@ class HeatmapHead(nn.Module):
         super().__init__()
         self.output_size = output_size
         self.layers = nn.Sequential(
+                nn.Dropout2d(p=0.1),
                 nn.Conv2d(in_channels, 128, kernel_size=3, dilation=2, padding=2, bias=False),
                 nn.BatchNorm2d(128),
                 nn.ReLU(inplace=True))
         intermediate_channels = 128 + extra_channels
         self.intermediate_layers = nn.Sequential(
-                nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, padding=1, bias=False),
+                nn.Dropout2d(p=0.1),
+                nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, dilation=2,
+                    padding=2, bias=False),
                 nn.BatchNorm2d(intermediate_channels),
                 nn.ReLU(inplace=True))
         self.output_conv = nn.Sequential(
-                nn.Dropout2d(p=0.1),
                 nn.Conv2d(intermediate_channels, 64, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(64),
                 nn.ReLU(inplace=True),
@@ -72,7 +75,7 @@ class KeypointNet(nn.Module):
         self.backbone = IntermediateLayerGetter(backbone, return_layers={str(backbone_last): 'out',
             str(stage_indices[-4]): 'large'})
         self.heatmap_head = HeatmapHead(output_size, backbone_channels, heatmaps_out, intermediate_channels)
-        self.center_head = CenterHead(output_size, backbone_channels, regression_features, intermediate_channels)
+        self.center_head = CenterHead(output_size, backbone_channels, regression_features * (heatmaps_out-1), intermediate_channels)
 
     def forward(self, x):
         backbone_out = self.backbone(x)

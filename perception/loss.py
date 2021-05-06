@@ -11,8 +11,8 @@ class FocalLoss(_Loss):
     def forward(self, pred, target):
         bce = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
         p = torch.sigmoid(pred)
-        p_t = (target >= 0.5) * p + (target < 0.5) * (1.0 - p)
-        return self.alpha * (1.0 - p_t) ** self.gamma * bce
+        diff = torch.abs(target - p)
+        return self.alpha * diff ** self.gamma * bce
 
 
 class KeypointLoss(_Loss):
@@ -21,8 +21,8 @@ class KeypointLoss(_Loss):
         self.keypoint_config = keypoint_config
         self.n_keypoint_maps = len(keypoint_config) + 1 # Add one for center map.
         self.heatmap_weight = 1.0
-        self.center_weight = 0.1
-        self.depth_weight = 1.0
+        self.center_weight = 1.0
+        self.depth_weight = 3.0
         self.focal_loss = FocalLoss()
         if reduction == 'mean':
             self.reduce = torch.mean
@@ -45,9 +45,12 @@ class KeypointLoss(_Loss):
 
         # Use only vectors from areas where there are keypoints.
         # N x 2 x H x W mask for vectors which are on top of keypoints
-        N2HW_positive = (heatmap_gt.sum(dim=1)[:, None] > 0.05).expand(-1, 2, -1, -1)
 
-        regression_loss = self.reduce(F.l1_loss(center_predictions[N2HW_positive], center_gt[N2HW_positive], reduction='none'))
+        N, D, two, H, W = center_gt.shape
+        center_predictions = center_predictions.reshape(N, D, two, H, W)
+
+        where_keypoints = (heatmap_gt[:, 1:, None] > 0.05).expand(-1, -1, 2, -1, -1)
+        regression_loss = self.reduce(F.l1_loss(center_predictions[where_keypoints], center_gt[where_keypoints], reduction='none'))
 
         losses = (heatmap_loss, depth_loss, regression_loss)
         return (self.heatmap_weight * heatmap_loss + self.depth_weight * depth_loss + self.center_weight * regression_loss), losses
