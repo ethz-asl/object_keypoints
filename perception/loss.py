@@ -20,10 +20,8 @@ class KeypointLoss(_Loss):
         super().__init__(size_average, reduce, reduction)
         self.keypoint_config = keypoint_config
         self.n_keypoint_maps = len(keypoint_config) + 1 # Add one for center map.
-        self.heatmap_weight = 1.0
-        self.center_weight = 1.0
-        self.depth_weight = 3.0
         self.focal_loss = FocalLoss()
+        self.center_weight = 1.0
         if reduction == 'mean':
             self.reduce = torch.mean
         elif reduction == 'sum':
@@ -31,29 +29,28 @@ class KeypointLoss(_Loss):
         else:
             raise NotImplementedError("Unknown reduction method {reduction}, try 'mean' or 'sum'.")
 
-    def forward(self, heatmap_predictions, heatmap_gt, depth_p, depth_gt, center_predictions, center_gt):
+    def forward(self, p_heatmaps, gt_heatmaps, p_centers, gt_centers):
         """
         predictions: N x D x H x W prediction tensor
         gt: N x D x H x W
         """
-        # heatmap_loss = F.binary_cross_entropy(torch.sigmoid(heatmap_predictions), heatmap_gt, reduction='none')
-        heatmap_loss = self.focal_loss(heatmap_predictions, heatmap_gt)
-        heatmap_loss = heatmap_loss.sum(dim=[1, 2, 3]).mean()
+        heatmap_loss = 0.0
+        center_loss = 0.0
+        heatmap_losses = []
+        center_losses = []
+        for p_hm, p_center in zip(p_heatmaps, p_centers):
+            loss = self.focal_loss(p_hm, gt_heatmaps).sum(dim=[1,2,3]).mean()
+            heatmap_loss += loss
+            heatmap_losses.append(loss)
 
-        where_depth = depth_gt > 0.01
-        depth_loss = self.reduce(F.l1_loss(depth_p[where_depth], depth_gt[where_depth], reduction='none'))
+            where_heat = gt_heatmaps > 0.01
+            where_heat = where_heat[:, 1:, None].expand(-1, -1, 2, -1, -1)
+            center_l1 = F.l1_loss(p_center[where_heat], gt_centers[where_heat], reduction='sum')
+            center_loss += center_l1
+            center_losses.append(center_l1)
 
-        # Use only vectors from areas where there are keypoints.
-        # N x 2 x H x W mask for vectors which are on top of keypoints
-
-        N, D, two, H, W = center_gt.shape
-        center_predictions = center_predictions.reshape(N, D, two, H, W)
-
-        where_keypoints = (heatmap_gt[:, 1:, None] > 0.05).expand(-1, -1, 2, -1, -1)
-        regression_loss = self.reduce(F.l1_loss(center_predictions[where_keypoints], center_gt[where_keypoints], reduction='none'))
-
-        losses = (heatmap_loss, depth_loss, regression_loss)
-        return (self.heatmap_weight * heatmap_loss + self.depth_weight * depth_loss + self.center_weight * regression_loss), losses
+        loss = heatmap_loss + self.center_weight * center_loss
+        return loss, heatmap_losses, center_losses
 
 if __name__ == "__main__":
     focal_loss = FocalLoss()

@@ -28,7 +28,7 @@ def main():
     flags = read_args()
     model = Model(flags).eval().cpu()
 
-    dummy_input = torch.randn(2, 3, 360, 640)
+    dummy_input = torch.randn(2, 3, 180, 320)
     input_names = ["frames"]
     output_names = ["out"]
 

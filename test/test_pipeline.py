@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 import sklearn
 from perception.utils import camera_utils
-from perception.datasets.video import StereoVideoDataset
+from perception.datasets.video import StereoVideoDataset, _compute_kernel
 from perception.pipeline import *
 
 keypoints_distinct = np.array([
@@ -85,6 +85,7 @@ class PipelineTest(unittest.TestCase):
         cls.keypoints_two_kinds = np.zeros((keypoints_two_kinds.shape[0] + 1, 3))
         cls.keypoints_two_kinds[0] = keypoints_two_kinds.mean(axis=0)
         cls.keypoints_two_kinds[1:] = keypoints_two_kinds
+        StereoVideoDataset.kernel = _compute_kernel(50, 25, 10.0)
 
     def test_extract_single_points(self):
         T_LW = np.eye(4)
@@ -98,7 +99,7 @@ class PipelineTest(unittest.TestCase):
             prediction_left[i] = cv2.resize(heatmap_left[i], (320, 180))
             prediction_right[i] = cv2.resize(heatmap_right[i], (320, 180))
 
-        extract_component = KeypointExtractionComponent(config_distinct, [180, 320])
+        extract_component = KeypointExtractionComponent(config_distinct, [180, 320], bandwidth=3.0)
         left_points, right_points = extract_component(prediction_left[None], prediction_right[None])
         for i in range(self.keypoints_distinct.shape[0]):
             p_L_hat = left_points[0][i][0]
@@ -117,9 +118,11 @@ class PipelineTest(unittest.TestCase):
 
         for i in range(heatmap_left.shape[0]):
             prediction_left[i] = cv2.resize(heatmap_left[i], (320, 180))
+            prediction_left[i] /= prediction_left[i].max()
             prediction_right[i] = cv2.resize(heatmap_right[i], (320, 180))
+            prediction_right[i] /= prediction_right[i].max()
 
-        extract_component = KeypointExtractionComponent(config_two_kinds, [180, 320])
+        extract_component = KeypointExtractionComponent(config_two_kinds, [180, 320], bandwidth=3.0)
         left_points, right_points = extract_component(prediction_left[None], prediction_right[None])
         left_points = sum(left_points[0], [])
         right_points = sum(right_points[0], [])
@@ -149,7 +152,7 @@ class PipelineTest(unittest.TestCase):
             prediction_left[i] = cv2.resize(heatmap_left[i], (320, 180))
             prediction_right[i] = cv2.resize(heatmap_right[i], (320, 180))
 
-        extract_component = KeypointExtractionComponent(config_distinct, [180, 320])
+        extract_component = KeypointExtractionComponent(config_distinct, [180, 320], bandwidth=3.0)
         left_points, right_points = extract_component(prediction_left[None], prediction_right[None])
         left_points = left_points[0]
         right_points = right_points[0]
@@ -180,7 +183,7 @@ class PipelineTest(unittest.TestCase):
         for i in range(heatmap_left.shape[0]):
             prediction_left[i] = cv2.resize(heatmap_left[i], (320, 180))
             prediction_right[i] = cv2.resize(heatmap_right[i], (320, 180))
-        keypoint_extraction = KeypointExtractionComponent(config_two_kinds, [180, 320])
+        keypoint_extraction = KeypointExtractionComponent(config_two_kinds, [180, 320], bandwidth=3.0)
         association = AssociationComponent()
         triangulation = TriangulationComponent()
         pose_solve = PoseSolveComponent(keypoints_distinct)

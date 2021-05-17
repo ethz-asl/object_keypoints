@@ -2,85 +2,79 @@ import torch
 import numpy as np
 from torch import nn
 from torch.nn import functional as F
-from torchvision.models._utils import IntermediateLayerGetter
-from torchvision.models import segmentation
-from torchvision.models import mobilenetv3
-class CenterHead(nn.Module):
-    def __init__(self, output_size, in_channels, features_out, extra_channels):
-        super().__init__()
-        self.output_size = output_size
-        self.layers = nn.Sequential(
-                nn.Dropout2d(p=0.1),
-                nn.Conv2d(in_channels, 32, kernel_size=3, dilation=2, padding=2, bias=False),
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True))
-        intermediate_channels = 32 + extra_channels
-        self.intermediate_layers = nn.Sequential(
-                nn.Dropout2d(p=0.1),
-                nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(intermediate_channels),
-                nn.ReLU(inplace=True))
-        self.output_conv = nn.Conv2d(intermediate_channels, features_out, kernel_size=1, padding=0, bias=True)
+from perception.corner_net_lite.core.models import CornerNet_Squeeze
+from perception.corner_net_lite.core.models.py_utils.utils import convolution
+from perception.corner_net_lite.core.base import load_nnet, load_cfg
+from perception.corner_net_lite.core.config import SystemConfig
+from perception.corner_net_lite.core.nnet.py_factory import NetworkFactory
+import timm
 
-    def forward(self, x, large):
-        x = self.layers(x)
-        x = F.interpolate(x, [45, 80], mode='bilinear', align_corners=False)
-        x = self.intermediate_layers(torch.cat([x, large], dim=1))
-        x = F.interpolate(x, self.output_size, mode='bilinear', align_corners=False)
-        return self.output_conv(x)
+
+def prediction_module(features_out):
+    return nn.Sequential(
+        convolution(1, 256, 256, with_bn=False),
+        nn.Conv2d(256, features_out, (1, 1))
+    )
 
 class HeatmapHead(nn.Module):
-    def __init__(self, output_size, in_channels, features_out, extra_channels):
+    def __init__(self, heatmaps):
         super().__init__()
-        self.output_size = output_size
-        self.layers = nn.Sequential(
-                nn.Dropout2d(p=0.1),
-                nn.Conv2d(in_channels, 128, kernel_size=3, dilation=2, padding=2, bias=False),
-                nn.BatchNorm2d(128),
-                nn.ReLU(inplace=True))
-        intermediate_channels = 128 + extra_channels
-        self.intermediate_layers = nn.Sequential(
-                nn.Dropout2d(p=0.1),
-                nn.Conv2d(intermediate_channels, intermediate_channels, kernel_size=3, dilation=2,
-                    padding=2, bias=False),
-                nn.BatchNorm2d(intermediate_channels),
-                nn.ReLU(inplace=True))
-        self.output_conv = nn.Sequential(
-                nn.Conv2d(intermediate_channels, 64, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(64, features_out * 2, kernel_size=1, padding=0, bias=True))
-        self.n_features = features_out
+        self.output_head1 = prediction_module(heatmaps)
+        self.output_head2 = prediction_module(heatmaps)
+        self.output_head1[-1].bias.data.fill_(0.01/0.99)
+        self.output_head2[-1].bias.data.fill_(0.01/0.99)
 
-    def forward(self, x, large):
-        x = self.layers(x)
-        x = F.interpolate(x, [45, 80], mode='bilinear', align_corners=False)
-        x = self.intermediate_layers(torch.cat([x, large], dim=1))
-        x = F.interpolate(x, self.output_size, mode='bilinear', align_corners=False)
-        x = self.output_conv(x)
-        heatmap = x[:, :self.n_features]
-        depth = F.relu(x[:, self.n_features:])
-        return heatmap, depth
+    def forward(self, heatmaps):
+        return self.output_head1(heatmaps[0]), self.output_head2(heatmaps[1])
 
-class KeypointNet(nn.Module):
-    def __init__(self, output_size, heatmaps_out=2, regression_features=2):
+class CenterHead(nn.Module):
+    def __init__(self, heatmaps):
         super().__init__()
-        self.output_size = output_size
-        backbone = mobilenetv3.mobilenet_v3_large(pretrained=True).features
-        stage_indices = [0] + [i for i, b in enumerate(backbone) if getattr(b, "_is_cn", False)] + [len(backbone) - 1]
-        backbone_last = stage_indices[-1]
-        backbone_channels = backbone[backbone_last].out_channels
-        intermediate_channels = backbone[stage_indices[-4]].out_channels
-
-        self.backbone = IntermediateLayerGetter(backbone, return_layers={str(backbone_last): 'out',
-            str(stage_indices[-4]): 'large'})
-        self.heatmap_head = HeatmapHead(output_size, backbone_channels, heatmaps_out, intermediate_channels)
-        self.center_head = CenterHead(output_size, backbone_channels, regression_features * (heatmaps_out-1), intermediate_channels)
+        self.outputs = heatmaps - 1
+        self.output_head1 = prediction_module(self.outputs * 2)
+        self.output_head2 = prediction_module(self.outputs * 2)
 
     def forward(self, x):
-        backbone_out = self.backbone(x)
-        heatmaps, depth = self.heatmap_head(backbone_out['out'], backbone_out['large'])
-        center_vectors = self.center_head(backbone_out['out'], backbone_out['large'])
-        return heatmaps, depth, center_vectors
+        N, C, H, W = x[1].shape
+        out1 = self.output_head1(x[0])
+        out2 = self.output_head2(x[1])
+        return out1.reshape(N, self.outputs, 2, H, W), out2.reshape(N, self.outputs, 2, H, W)
+
+def nms(x):
+    hmax = nn.functional.max_pool2d(x, (3, 3), padding=1, stride=1)
+    keep = (x == hmax).to(x.dtype)
+    return x * keep
+
+class KeypointNet(nn.Module):
+    def __init__(self, output_size, heatmaps_out=2):
+        super().__init__()
+        self.backbone = self._build_hourglass()
+        self.heatmap_head = HeatmapHead(heatmaps_out)
+        self.center_head = CenterHead(heatmaps_out)
+
+    def _build_hourglass(self):
+        corner_net = CornerNet_Squeeze.model()
+        config, _ = load_cfg("./perception/corner_net_lite/configs/CornerNet_Squeeze.json")
+        sys_cfg = SystemConfig().update_config(config)
+        net = load_nnet(sys_cfg, corner_net)
+        if torch.cuda.is_available():
+            net.load_pretrained_params('./models/corner_net.pkl')
+        else:
+            print('Cuda not available. Will not load pretrained params')
+        return net.model.module.hg
+
+    def forward(self, x, train=True):
+        features = self.backbone(x)
+        heatmaps_out = self.heatmap_head(features)
+        centers_out = self.center_head(features)
+        if train:
+            return heatmaps_out, centers_out
+        else:
+            return [self._postprocess(o) for o in heatmaps_out], centers_out
+
+    @staticmethod
+    def _postprocess(x):
+        x = torch.sigmoid(x)
+        return nms(x)
 
 

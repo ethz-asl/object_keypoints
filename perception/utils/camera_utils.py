@@ -25,15 +25,15 @@ def load_calibration_params(calibration_file):
     D = np.array(calibration['cam0']['distortion_coeffs'])
     Dp = np.array(calibration['cam1']['distortion_coeffs'])
 
-    T_LR = np.array(calibration['cam1']['T_cn_cnm1'])
+    T_RL = np.array(calibration['cam1']['T_cn_cnm1'])
     image_size = calibration['cam1']['resolution'][::-1]
     return {
         'K': K,
         'Kp': Kp,
         'D': D,
         'Dp': Dp,
-        'T_LR': T_LR,
-        'T_RL': np.linalg.inv(T_LR),
+        'T_LR': np.linalg.inv(T_RL),
+        'T_RL': T_RL,
         'image_size': image_size
     }
 
@@ -49,3 +49,13 @@ def scale_camera_matrix(K, scaling_factor):
     out[0, 2] = K[0, 2] * scaling_factor[0]
     out[1, 2] = K[1, 2] * scaling_factor[1]
     return out
+
+def shift_scale_camera_matrix(K, original_size, scaled_size, shift):
+    out = K.copy()
+    scaling_factor = scaled_size / original_size
+    out[0, 0] = K[0, 0] * scaling_factor[0]
+    out[1, 1] = K[1, 1] * scaling_factor[1]
+    out[0, 2] = K[0, 2] * scaling_factor[0] - shift[0] * scaling_factor[0]
+    out[1, 2] = K[1, 2] * scaling_factor[1] - shift[1] * scaling_factor[1]
+    return out
+

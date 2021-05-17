@@ -1,0 +1,3 @@
+[submodule "perception/corner_net_lite"]
+	path = perception/corner_net_lite
+	url = https://github.com/princeton-vl/CornerNet-Lite

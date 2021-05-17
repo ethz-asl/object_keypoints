@@ -14,5 +14,5 @@ class KeypointClustering:
         returns: C x D keypoint estimates. C is the amount of clusters found.
         """
         self.clustering.fit(indices)
-        return self.clustering.cluster_centers_
+        return self.clustering.cluster_centers_, self.clustering.labels_
 
