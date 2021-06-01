@@ -40,8 +40,8 @@ class CenterHead(nn.Module):
         out2 = self.output_head2(x[1])
         return out1.reshape(N, self.outputs, 2, H, W), out2.reshape(N, self.outputs, 2, H, W)
 
-def nms(x):
-    hmax = nn.functional.max_pool2d(x, (3, 3), padding=1, stride=1)
+def nms(x, size=5):
+    hmax = nn.functional.max_pool2d(x, (size, size), padding=size // 2, stride=1)
     keep = (x == hmax).to(x.dtype)
     return x * keep
 

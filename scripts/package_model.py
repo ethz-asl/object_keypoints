@@ -7,7 +7,7 @@ from train import KeypointModule
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str)
-    parser.add_argument('--out', type=str)
+    parser.add_argument('--out', type=str, required=True)
     parser.add_argument('--keypoint-config', type=str, default='./config/cups.json')
     return parser.parse_args()
 
@@ -20,15 +20,15 @@ class Model(torch.nn.Module):
                 keypoint_config=keypoint_config).model
 
     def forward(self, x):
-        heatmap, depth, centers = self.model(x)
-        N, D, H, W = centers.shape
-        return torch.sigmoid(heatmap), depth, centers.reshape(N, D // 2, 2, H, W)
+        heatmap, centers = self.model(x, train=False)
+        N, D, two, H, W = centers[-1].shape
+        return heatmap[-1], centers[-1]
 
 def main():
     flags = read_args()
-    model = Model(flags).eval().cpu()
+    model = Model(flags).eval().cuda()
 
-    dummy_input = torch.randn(2, 3, 180, 320)
+    dummy_input = torch.randn(2, 3, 511, 511).cuda()
     input_names = ["frames"]
     output_names = ["out"]
 

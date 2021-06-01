@@ -6,5 +6,6 @@ pytorch-lightning==1.2.1
 scikit-learn==0.24.1
 timm==0.4.5
 rich
+numba
 
 

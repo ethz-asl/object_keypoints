@@ -30,6 +30,7 @@ def read_args():
     parser.add_argument('--cpu', action='store_true', help='Run model on cpu.')
     parser.add_argument('--world', action='store_true', help='Project points from world points.')
     parser.add_argument('--seed', type=int, default=0, help="Random seed.")
+    parser.add_argument('--debug', action='store_true', help="Does not use background worker in dataloader.")
     return parser.parse_args()
 
 IMAGE_RECT = hud.Rect(0.0, 0.0, 511, 511.0)
@@ -48,18 +49,16 @@ class Sequence:
         self.size_resized = np.array([StereoVideoDataset.height_resized, StereoVideoDataset.width_resized])
         self.scaling_factor = self.prediction_size / self.size_resized
         self.image_offset = StereoVideoDataset.image_offset
-        self.scaled_size = np.array([1280.0 * (511.0 / 720.0), 511.0]) * self.scaling_factor
         self.scale_prediction_to_image = self.prediction_size / self.size_resized
-        self.scale_full_to_resized = np.ones(2) / (511.0 / 720.0)
 
         self._load_calibration()
         self._read_keypoints()
 
     def _loader(self, dataset):
-        return DataLoader(dataset, num_workers=0, batch_size=1, pin_memory=not self.flags.cpu and torch.cuda.is_available())
+        return DataLoader(dataset, num_workers=0 if self.flags.debug else 1, batch_size=1, pin_memory=not self.flags.cpu and torch.cuda.is_available())
 
     def _read_keypoints(self):
-        self.world_points = self.dataset_left.world_points.reshape(self.dataset_left.n_objects, -1, 3)
+        self.world_points = self.dataset_left.world_points.reshape(self.dataset_left.n_objects, self.dataset_left.n_keypoints, 3)
         filepath = os.path.join(self.sequence_path, 'keypoints.json')
         with open(filepath, 'rt') as f:
             self.keypoints = np.array(json.loads(f.read())['3d_points'])[:, :3]
@@ -67,18 +66,19 @@ class Sequence:
     def _load_calibration(self):
         calibration_file = os.path.join(self.sequence_path, 'calibration.yaml')
         params = camera_utils.load_calibration_params(calibration_file)
-        self.K = params['K']
-        self.Kp = params['Kp']
-        self.D = params['D']
-        self.Dp = params['Dp']
-        self.T_LR = params['T_LR']
-        self.T_RL = params['T_RL']
-        self.R_L, _ = cv2.Rodrigues(self.T_RL[:3, :3])
-        self.R_R, _ = cv2.Rodrigues(np.eye(3))
-        self.image_size = np.array(params['image_size'])
+        left_camera = camera_utils.FisheyeCamera(params['K'], params['D'], params['image_size'])
+        left_camera = left_camera.scale(StereoVideoDataset.height_resized / StereoVideoDataset.height)
+        right_camera = camera_utils.FisheyeCamera(params['Kp'], params['Dp'], params['image_size'])
+        right_camera = right_camera.scale(StereoVideoDataset.height_resized / StereoVideoDataset.height)
+        self.left_camera = left_camera.cut(self.image_offset)
+        self.right_camera = right_camera.cut(self.image_offset)
 
-        self.K_small = camera_utils.shift_scale_camera_matrix(self.K, self.image_size[::-1], self.scaled_size, self.image_offset)
-        self.Kp_small = camera_utils.shift_scale_camera_matrix(self.Kp, self.image_size[::-1], self.scaled_size, self.image_offset)
+        self.stereo_camera = camera_utils.StereoCamera(self.left_camera, self.right_camera, params['T_RL'])
+
+        scale_small = self.prediction_size[0] / StereoVideoDataset.height_resized
+        left_camera_small = left_camera.cut(self.image_offset).scale(scale_small)
+        right_camera_small = right_camera.cut(self.image_offset).scale(scale_small)
+        self.stereo_camera_small = camera_utils.StereoCamera(left_camera_small, right_camera_small, params['T_RL'])
 
     def to_image_points(self, predictions):
         # predictions: points in 2d prediction space.
@@ -86,13 +86,11 @@ class Sequence:
 
     def project_points_left(self, p_LK):
         p_LK = np.concatenate(p_LK, axis=0)
-        points, _ = cv2.fisheye.projectPoints(p_LK[:, None], self.R_L, self.T_RL[:3, 3], self.K_small, self.D)
-        return points.reshape(-1, 2)
+        return self.left_camera.project(p_LK)
 
     def project_points_right(self, p_LK):
         p_LK = np.concatenate(p_LK, axis=0)
-        points, _ = cv2.fisheye.projectPoints(p_LK[:, None], self.R_R, 2.0 * self.T_RL[:3, 3], self.Kp_small, self.Dp)
-        return points.reshape(-1, 2)
+        return self.right_camera.project(p_LK, self.stereo_camera.T_RL)
 
 object_color_maps = [cm.get_cmap('Reds'), cm.get_cmap('Purples'), cm.get_cmap('Greens'), cm.get_cmap('Blues'), cm.get_cmap('Oranges')]
 n_colormaps = len(object_color_maps)
@@ -100,7 +98,7 @@ def _point_colors(object_points):
     # Color per object.
     colors = []
     for i, points in enumerate(object_points):
-        colors.append(object_color_maps[i % n_colormaps](np.linspace(0.7, 0.9, points.shape[0])))
+        colors.append(object_color_maps[i % n_colormaps](np.linspace(0.7, 1.0, points.shape[0])))
     return np.concatenate(colors)
 
 class Visualizer:
@@ -166,7 +164,6 @@ class Results:
     def __init__(self):
         self.gt_keypoints = []
         self.predicted_keypoints = []
-        self.K = self.Kp = self.D = self.Dp = None
         self.T_RL = None
         self.console = Console()
         self.screen = self.console.screen()
@@ -177,59 +174,68 @@ class Results:
         objects: object detections
         keypoints: n_objects X n_keypoints X 3 gt keypoints
         """
-        centers = scene_points[:, 0, :]
         gt_keypoints = []
         keypoints = []
-        T_LW = np.linalg.inv(T_WL)
-        T_RW = np.linalg.inv(T_WR)
-        T_RL = T_RW @ T_WL
-        print(np.abs(T_RL - self.T_RL).round(3))
+        T_LW = linalg.inv_transform(T_WL)
+        T_RW = linalg.inv_transform(T_WR)
         R_L, _ = cv2.Rodrigues(T_LW[:3, :3])
         R_R, _ = cv2.Rodrigues(T_RW[:3, :3])
+
+        scene_points_L = linalg.transform_points(T_LW, scene_points)
+        centers_L = scene_points_L[:, 0]
         for obj in objects:
             p_LK = obj['p_L']
-            object_keypoints = []
-            center_W = T_WL @ np.concatenate([p_LK[0].T, np.ones((1, 1))], axis=0)
-            closest_object = np.linalg.norm(centers - center_W[:3, 0], axis=1).argmin()
-            gt_points = []
-            for i, point in enumerate(p_LK):
-                gt_point = scene_points[closest_object, i]
-                gt_point_left = cv2.fisheye.projectPoints(gt_point[None, None, :], R_L, T_LW[:3, 3], self.K, self.D)[0].ravel()
-                gt_point_right = cv2.fisheye.projectPoints(gt_point[None, None, :], R_R, T_RW[:3, 3], self.Kp, self.Dp)[0].ravel()
-                if (gt_point_left <= 0.0).any() or (gt_point_left >= self.frame_size).any():
-                    print('point in left not in view')
-                    continue
-                if (gt_point_right <= 0.0).any() or (gt_point_right >= self.frame_size).any():
-                    print('point in right not in view')
-                    continue
+            # Disregard depth as that is likely off by a bit.
+            object_distances = np.linalg.norm(centers_L[:, :2] - p_LK[0][0][:2], axis=1)
+            closest_object = object_distances.argmin()
+            object_points = scene_points_L[closest_object]
+            # print("d: ", object_distances[closest_object])
 
-                if point is not None and point.size > 0:
-                    p_W = T_WL @ np.concatenate([point[:1].T, np.ones((1, 1))], axis=0)
-                    point_left = cv2.fisheye.projectPoints(p_W[None, None, :3, 0], R_L, T_LW[:3, 3], self.K, self.D)[0].ravel()
-                    print('image space: ', np.abs(point_left - gt_point_left).round(2))
-                    print('world space: ', np.abs(gt_point - p_W[:3, 0]).round(2))
-                    object_keypoints.append(p_W[:3, 0])
-                else:
-                    object_keypoints.append(None)
-                gt_points.append(scene_points[closest_object, i])
+            gt_center_left = self.stereo_camera.left_camera.project(object_points[0:1])
+            gt_center_right = self.stereo_camera.right_camera.project(object_points[0:1])
+            if (not self.stereo_camera.left_camera.in_frame(gt_center_left)[0] or
+                not self.stereo_camera.right_camera.in_frame(gt_center_right)[0]):
+                # Object center is not in view. Skipping this object.
+                print("Object center not in view.")
+                continue
+
+            gt_points = []
+            object_keypoints = []
+            for i, points in enumerate(p_LK):
+                for point in points:
+                    if point is not None and point[2] < 2.0:
+                        closest_point = np.linalg.norm(object_points - point, axis=1).argmin()
+                        gt_point_L = object_points[closest_point]
+                        gt_point_left = self.stereo_camera.left_camera.project(gt_point_L[None])
+                        gt_point_right = self.stereo_camera.right_camera.project(gt_point_L[None], self.stereo_camera.T_RL)
+
+                        if (self.stereo_camera.left_camera.in_frame(gt_point_left) == False).any():
+                            print('point in left not in view')
+                            continue
+                        if (self.stereo_camera.right_camera.in_frame(gt_point_right) == False).any():
+                            print('point in right not in view')
+                            continue
+
+                        print('diff: ', (gt_point_L - point).round(2), end='\r')
+                        object_keypoints.append(point)
+                        gt_points.append(gt_point_L)
+                    else:
+                        object_keypoints.append(None)
+                        gt_points.append(None)
             gt_keypoints.append(gt_points)
             keypoints.append(object_keypoints)
         self.gt_keypoints.append(gt_keypoints)
         self.predicted_keypoints.append(keypoints)
 
-    def set_calibration(self, K, Kp, D, Dp, T_RL, frame_size):
-        self.frame_size = frame_size
-        self.T_RL = T_RL
-        self.T_LR = np.linalg.inv(T_RL)
-        self.K = K
-        self.Kp = Kp
-        self.D = D
-        self.Dp = Dp
+    def set_calibration(self, stereo_camera):
+        self.stereo_camera = stereo_camera
 
     def print_results(self):
         errors = []
+        errors_xy = []
         missing = 0
         n_points = 0
+        small_error = 0
         for gt, predicted in zip(self.gt_keypoints, self.predicted_keypoints):
             assert len(gt) == len(predicted)
             for gt_points, p_points in zip(gt, predicted):
@@ -237,18 +243,33 @@ class Results:
                 for gt_point, p_point in zip(gt_points, p_points):
                     n_points += 1
                     if p_point is not None:
+                        assert gt_point.shape == p_point.shape
                         error = np.linalg.norm(gt_point - p_point, 2, axis=0)
+                        error_xy = np.linalg.norm(gt_point[:2] - p_point[:2], 2, axis=0)
+                        assert error.size == 1
                         errors.append(error)
+                        errors_xy.append(error_xy)
+                        if error < 0.03:
+                            small_error += 1
                     else:
                         missing += 1
         table = Table(show_header=True)
         table.add_column("mean")
+        table.add_column("mean xy")
         table.add_column("std")
+        table.add_column("< 3cm")
+        table.add_column("25th percentile")
+        table.add_column("75th percentile")
         table.add_column("missing")
         table.add_column("points")
         errors = np.array(errors) * 100.0 # convert to cm
+        errors_xy = np.array(errors_xy) * 100.0
+        small = float(small_error) / float(n_points)
+        percentile25 = np.percentile(errors, 25)
+        percentile75 = np.percentile(errors, 75)
         missing_percentage = (float(missing) / float(n_points)) * 100.0
-        table.add_row(f"{errors.mean()}", f"{errors.std()}", f"{missing_percentage:.02f}%", f"{n_points}")
+        table.add_row(f"{errors.mean()}", f"{errors_xy.mean()}", f"{errors.std()}",
+                f"{small}", f"{percentile25}", f"{percentile75}", f"{missing_percentage:.02f}%", f"{n_points}")
         self.screen.update(table)
 
 class Runner:
@@ -283,13 +304,17 @@ class Runner:
         y_scaling = left.shape[0] / 720.0
         axis = pyplot.subplot2grid((1, 2), loc=(0, 0), fig=self.figure)
         axis.imshow(left)
-        c = _point_colors(left_points.shape[0])
-        axis.scatter(left_points[:, 0] * x_scaling, left_points[:, 1] * y_scaling, s=5.0, color=c)
+        if len(left_points):
+            c = _point_colors(left_points)
+            left_points = np.concatenate(left_points, axis=0)
+            axis.scatter(left_points[:, 0], left_points[:, 1], s=5.0, color=c)
         axis.axis('off')
         axis = pyplot.subplot2grid((1, 2), loc=(0, 1), fig=self.figure)
         axis.imshow(right)
-        c = _point_colors(right_points.shape[0])
-        axis.scatter(right_points[:, 0] * x_scaling, right_points[:, 1] * y_scaling, s=5.0, color=c)
+        if len(right_points):
+            c = _point_colors(right_points)
+            right_points = np.concatenate(right_points, axis=0)
+            axis.scatter(right_points[:, 0], right_points[:, 1], s=5.0, color=c)
         axis.axis('off')
         self.figure.savefig(os.path.join(self.flags.write, f'{self.frame_number:06}.jpg'), pil_kwargs={'quality': 85}, bbox_inches='tight')
         self.figure.clf()
@@ -300,20 +325,22 @@ class Runner:
         else:
             self.pipeline = LearnedKeypointTrackingPipeline(self.flags.model, not self.flags.cpu and torch.cuda.is_available(),
                     sequence.prediction_size, sequence.keypoints, sequence.keypoint_config)
-        self.pipeline.reset(sequence.K, sequence.Kp, sequence.D, sequence.Dp, sequence.T_RL, sequence.image_size[::-1], sequence.scaled_size, sequence.image_offset)
-        self.results.set_calibration(sequence.K_small, sequence.Kp_small, sequence.D, sequence.Dp, sequence.T_RL, sequence.prediction_size)
+        self.pipeline.reset(sequence.stereo_camera_small)
+        self.results.set_calibration(sequence.stereo_camera_small)
 
         rate = Rate(30)
         for i, ((left_frame, l_target, l_centers, T_WL, l_keypoints), (right_frame, r_target, r_centers, T_WR, r_keypoints)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
             N = left_frame.shape[0]
             if self.flags.ground_truth:
-                l_target = nms(l_target)
-                r_target = nms(r_target)
                 objects = self.pipeline(l_target, l_centers, r_target, r_centers)
-                p_left = l_target[0]
-                p_right = r_target[0]
+                heatmap_left = self._to_heatmap(l_target[0].numpy())
+                heatmap_right = self._to_heatmap(r_target[0].numpy())
             else:
-                objects = self.pipeline(left_frame, l_centers, right_frame, r_centers)
+                objects, heatmaps = self.pipeline(left_frame, right_frame)
+                heatmap_left = self._to_heatmap(heatmaps[0][0].numpy())
+                heatmap_right = self._to_heatmap(heatmaps[1][0].numpy())
+                heatmap_left[heatmap_left < 0.25] = 0.0
+                heatmap_right[heatmap_right < 0.25] = 0.0
 
             self.results.add(T_WL[0].numpy(), T_WR[0].numpy(), objects, sequence.world_points)
 
@@ -321,8 +348,6 @@ class Runner:
             right_frame = right_frame.cpu().numpy()[0]
             left_rgb = self._to_image(left_frame)
             right_rgb = self._to_image(right_frame)
-            heatmap_left = self._to_heatmap(l_target[0].numpy())
-            heatmap_right = self._to_heatmap(r_target[0].numpy())
             image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
             image_right = (0.3 * right_rgb + 0.7 * heatmap_right).astype(np.uint8)
 
@@ -339,14 +364,14 @@ class Runner:
             else:
                 for obj in objects:
                     if self.flags.world:
-                        p_LK = [p for p in obj['p_L'] if p is not None]
+                        p_LK = [[a for a in p if a is not None] for p in obj['p_L'] if p is not None]
                         p_left = sequence.project_points_left(p_LK)
                         p_right = sequence.project_points_right(p_LK)
                     else:
                         p_left = np.concatenate([p for p in obj['keypoints_left'] if p.size != 0], axis=0)
                         p_right = np.concatenate([p for p in obj['keypoints_right'] if p.size != 0], axis=0)
-                    p_left = sequence.to_image_points(p_left)
-                    p_right = sequence.to_image_points(p_right)
+                        p_left = sequence.to_image_points(p_left)
+                        p_right = sequence.to_image_points(p_right)
                     points_left.append(p_left)
                     points_right.append(p_right)
 
@@ -355,6 +380,7 @@ class Runner:
             else:
                 self.visualizer.set_left_image(image_left)
                 self.visualizer.set_right_image(image_right)
+
                 if len(points_left) > 0:
                     self.visualizer.set_left_points(points_left)
                 if len(points_right) > 0:

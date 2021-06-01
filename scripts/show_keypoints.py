@@ -9,7 +9,7 @@ import cv2
 import constants
 import yaml
 from skvideo import io as video_io
-from perception.utils import camera_utils, Rate
+from perception.utils import camera_utils, Rate, linalg
 hud.set_data_directory(os.path.dirname(hud.__file__))
 
 def read_args():
@@ -70,16 +70,13 @@ class ViewModel:
             raise StopIteration()
         T_WL = self.hdf['left/camera_transform'][self.current_frame]
         T_WR = self.hdf['right/camera_transform'][self.current_frame]
-        T_LW = np.linalg.inv(T_WL)
-        T_RW = np.linalg.inv(T_WR)
+        T_LW = linalg.inv_transform(T_WL)
+        T_RW = linalg.inv_transform(T_WR)
         R_l, _ = cv2.Rodrigues(T_LW[:3, :3])
         R_r, _ = cv2.Rodrigues(T_RW[:3, :3])
         left_frame_points = []
         right_frame_points = []
         for p_WK in self.world_points:
-            p_LK = T_LW @ p_WK
-            p_RK = T_RW @ p_WK
-
             p_l, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3], R_l, T_LW[:3, 3], self.K, self.D)
             p_r, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3], R_r, T_RW[:3, 3], self.Kp, self.Dp)
             p_l = p_l.ravel()

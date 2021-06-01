@@ -77,7 +77,7 @@ class KeypointModule(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=3e-5)
+        return torch.optim.Adam(self.parameters(), lr=3e-4)
 
     def _validation_loss(self, heatmaps, keypoints):
         # heatmaps: N x K x H x W
@@ -135,7 +135,7 @@ class DataModule(pl.LightningDataModule):
             train_datasets = []
             for camera in [0, 1]:
                 train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=True, camera=camera)
-            val_datasets = (_build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, include_pose=True) +
+            val_datasets = (_build_datasets(self.val_sequences, camera=0, keypoint_config=self.keypoint_config, augment=False, include_pose=True) +
                     _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, camera=1, include_pose=True))
             self.train = SamplingPool(Chain(train_datasets, shuffle=True, infinite=True), self.flags.pool)
             self.val = Chain(val_datasets, shuffle=True)
