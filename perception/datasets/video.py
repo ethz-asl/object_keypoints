@@ -69,7 +69,7 @@ class StereoVideoDataset(IterableDataset):
     # Offset x, y start point of cropped image.
     image_offset = np.array([(height_resized / height * width - 511.0) / 2.0, 0.0])
 
-    def __init__(self, base_dir, keypoint_config, augment=False, camera=None,
+    def __init__(self, base_dir, keypoint_config, augment=False, augment_color=False, camera=None,
             include_pose=False):
         self.base_dir = os.path.expanduser(base_dir)
         self.metadata_path = os.path.join(self.base_dir, "data.hdf5")
@@ -84,21 +84,22 @@ class StereoVideoDataset(IterableDataset):
         self.target_pixel_indices = _pixel_indices(*self.prediction_size)
 
         targets = {'image': 'image', 'keypoints': 'keypoints'}
+        augmentations = []
         if augment:
-            augmentations = [A.RandomResizedCrop(height=self.image_size[0], width=self.image_size[1], scale=(0.6, 1.0), ratio=(1.0, 1.0), p=0.9),
-                    A.RandomBrightnessContrast(p=0.25),
-                    A.RandomGamma(p=0.25),
-                    A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=25, val_shift_limit=25, p=0.25),
-                    A.GaussNoise(p=0.5),
+            augmentations += [A.RandomResizedCrop(height=self.image_size[0], width=self.image_size[1], scale=(0.7, 1.0), ratio=(1.0, 1.0)),
                     A.HorizontalFlip(p=0.5),
                     A.VerticalFlip(p=0.5)]
-            self.augmentations = A.Compose(augmentations, additional_targets=targets,
-                    keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
         else:
-            self.augmentations = A.Compose([
-                A.SmallestMaxSize(max_size=max(self.image_size[0], self.image_size[1])),
-                A.CenterCrop(height=self.image_size[0], width=self.image_size[1])
-            ], additional_targets=targets, keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
+            augmentations += [A.SmallestMaxSize(max_size=max(self.image_size[0], self.image_size[1])),
+                A.CenterCrop(height=self.image_size[0], width=self.image_size[1])]
+
+        if augment_color:
+            augmentations += [A.RandomBrightnessContrast(p=0.25),
+                    A.RandomGamma(p=0.25),
+                    A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=25, val_shift_limit=25, p=0.25),
+                    A.GaussNoise(p=0.5)]
+
+        self.augmentations = A.Compose(augmentations, additional_targets=targets, keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
         self.mean = RGB_MEAN
         self.std = RGB_STD
 
@@ -260,7 +261,6 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
                     center_map[i][:, within_range] = center_vectors[:, within_range]
                     keypoint_index += 1
         return center_map
-
 
     @staticmethod
     def to_image(image):

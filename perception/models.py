@@ -63,18 +63,9 @@ class KeypointNet(nn.Module):
             print('Cuda not available. Will not load pretrained params')
         return net.model.module.hg
 
-    def forward(self, x, train=True):
+    def forward(self, x):
         features = self.backbone(x)
         heatmaps_out = self.heatmap_head(features)
         centers_out = self.center_head(features)
-        if train:
-            return heatmaps_out, centers_out
-        else:
-            return [self._postprocess(o) for o in heatmaps_out], centers_out
-
-    @staticmethod
-    def _postprocess(x):
-        x = torch.sigmoid(x)
-        return nms(x)
-
+        return heatmaps_out, centers_out
 

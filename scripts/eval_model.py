@@ -202,8 +202,10 @@ class Results:
             gt_points = []
             object_keypoints = []
             for i, points in enumerate(p_LK):
+                if points is None:
+                    continue
                 for point in points:
-                    if point is not None and point[2] < 2.0:
+                    if point is not None and (point < 2.0).all():
                         closest_point = np.linalg.norm(object_points - point, axis=1).argmin()
                         gt_point_L = object_points[closest_point]
                         gt_point_left = self.stereo_camera.left_camera.project(gt_point_L[None])

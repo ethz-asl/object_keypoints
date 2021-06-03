@@ -5,6 +5,7 @@ import numpy as np
 import json
 from matplotlib import pyplot as plt
 from albumentations.augmentations import transforms
+from perception.models import nms
 import albumentations as A
 from torch.utils.data import DataLoader
 from perception.loss import KeypointLoss
@@ -63,12 +64,12 @@ class KeypointModule(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         frame, target, gt_centers, _, keypoints = batch
-        heatmaps, p_centers = self(frame, train=False)
+        heatmaps, p_centers = self(frame)
 
-        loss = self._validation_loss(heatmaps, keypoints)
-        loss, heatmap_losses, center_losses = self.loss(heatmaps, target, p_centers, gt_centers)
+        loss = self._validation_loss(heatmaps, target, keypoints)
+        val_loss, heatmap_losses, center_losses = self.loss(heatmaps, target, p_centers, gt_centers)
 
-        self.log('val_loss', loss)
+        self.log('val_loss', val_loss)
         self.log('val_heatmap_loss1', heatmap_losses[0])
         self.log('val_heatmap_loss2', heatmap_losses[1])
         self.log('val_center_loss1', center_losses[0])
@@ -77,38 +78,24 @@ class KeypointModule(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=3e-4)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=3e-4, weight_decay=0.01)
+        schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=10)
+        return {
+            'scheduler': schedule,
+            'interval': 'epoch',
+            'frequency': 1,
+            'monitor': 'train_loss',
+            'optimizer': optimizer
+        }
 
-    def _validation_loss(self, heatmaps, keypoints):
+    def _validation_loss(self, p_heatmaps, gt_heatmap, keypoints):
         # heatmaps: N x K x H x W
         # target: N x n_objects x K x 2
-        heatmaps = heatmaps[-1]
-        N, K, H, W = heatmaps.shape
+        p_heatmap = torch.sigmoid(p_heatmaps[-1])
+        loss = torch.nn.functional.l1_loss(p_heatmap, gt_heatmap)
 
-        true_positives = 0
-        false_positives = 0
-        total = 0
-        for i in range(N):
-            for k in range(K):
-                heatmap = heatmaps[i, k].detach().cpu().numpy()
-                actual = keypoints[i, :, k].detach().cpu().numpy() # O x 2
-                predicted = np.argwhere(heatmap > 0.5) # D x 2
-                if predicted.shape[0] == 0:
-                    continue
-                dima = np.linalg.norm(actual[:, None] - predicted[None], 2, axis=2)
-                # O x D
-                detected = dima.min(axis=1) <= 1.0
-                detected = detected.sum()
-                true_positives += detected
-                false_positives += (dima.min(axis=1) > 1.0).sum()
-                total += actual.shape[0]
-        if total == 0:
-            return 1e7
-        true_positive = float(true_positives) / float(total)
-        false_positive = float(false_positives) / float(total)
-        self.log('val_true_positive', true_positive)
-        self.log('val_false_positive', false_positive)
-        return np.abs(1.0 - true_positive) + false_positive
+        self.log('val_heatmap_l1', loss)
+        return loss
 
 def _build_datasets(sequences, **kwargs):
     datasets = []
@@ -134,7 +121,8 @@ class DataModule(pl.LightningDataModule):
         if stage == 'fit':
             train_datasets = []
             for camera in [0, 1]:
-                train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=True, camera=camera)
+                train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=True, augment_color=True, camera=camera)
+                train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=False, augment_color=True, camera=camera)
             val_datasets = (_build_datasets(self.val_sequences, camera=0, keypoint_config=self.keypoint_config, augment=False, include_pose=True) +
                     _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, camera=1, include_pose=True))
             self.train = SamplingPool(Chain(train_datasets, shuffle=True, infinite=True), self.flags.pool)

@@ -36,8 +36,8 @@ class ViewModel:
         self.world_points = [np.array(p) for p in contents['3d_points']]
 
     def _load_video(self, base_dir):
-        self.left_video = video_io.vreader(os.path.join(base_dir, 'left_preview.mp4'))
-        self.right_video = video_io.vreader(os.path.join(base_dir, 'right_preview.mp4'))
+        self.left_video = video_io.vreader(os.path.join(base_dir, 'left.mp4'))
+        self.right_video = video_io.vreader(os.path.join(base_dir, 'right.mp4'))
 
     def _load_metadata(self, base_dir):
         self.hdf = h5py.File(os.path.join(base_dir, 'data.hdf5'), 'r')
