@@ -10,17 +10,17 @@ from perception.corner_net_lite.core.nnet.py_factory import NetworkFactory
 import timm
 
 
-def prediction_module(features_out):
+def prediction_module(int_features, features_out):
     return nn.Sequential(
-        convolution(1, 256, 256, with_bn=False),
-        nn.Conv2d(256, features_out, (1, 1))
+        convolution(1, 256, int_features, with_bn=False),
+        nn.Conv2d(int_features, features_out, (1, 1))
     )
 
 class HeatmapHead(nn.Module):
-    def __init__(self, heatmaps):
+    def __init__(self, features, heatmaps):
         super().__init__()
-        self.output_head1 = prediction_module(heatmaps)
-        self.output_head2 = prediction_module(heatmaps)
+        self.output_head1 = prediction_module(features, heatmaps)
+        self.output_head2 = prediction_module(features, heatmaps)
         self.output_head1[-1].bias.data.fill_(0.01/0.99)
         self.output_head2[-1].bias.data.fill_(0.01/0.99)
 
@@ -28,11 +28,11 @@ class HeatmapHead(nn.Module):
         return self.output_head1(heatmaps[0]), self.output_head2(heatmaps[1])
 
 class CenterHead(nn.Module):
-    def __init__(self, heatmaps):
+    def __init__(self, features, heatmaps):
         super().__init__()
         self.outputs = heatmaps - 1
-        self.output_head1 = prediction_module(self.outputs * 2)
-        self.output_head2 = prediction_module(self.outputs * 2)
+        self.output_head1 = prediction_module(features, self.outputs * 2)
+        self.output_head2 = prediction_module(features, self.outputs * 2)
 
     def forward(self, x):
         N, C, H, W = x[1].shape
@@ -46,11 +46,11 @@ def nms(x, size=5):
     return x * keep
 
 class KeypointNet(nn.Module):
-    def __init__(self, output_size, heatmaps_out=2):
+    def __init__(self, output_size, features=128, heatmaps_out=2):
         super().__init__()
         self.backbone = self._build_hourglass()
-        self.heatmap_head = HeatmapHead(heatmaps_out)
-        self.center_head = CenterHead(heatmaps_out)
+        self.heatmap_head = HeatmapHead(features, heatmaps_out)
+        self.center_head = CenterHead(features, heatmaps_out)
 
     def _build_hourglass(self):
         corner_net = CornerNet_Squeeze.model()

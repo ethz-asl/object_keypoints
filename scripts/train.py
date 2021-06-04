@@ -17,13 +17,15 @@ import pytorch_lightning as pl
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--workers', '-w', type=int, default=8, help="How many workers to use in data loader.")
-    parser.add_argument('--batch-size', default=8, type=int)
     parser.add_argument('--train', type=str, required=True, help="Path to training dataset.")
     parser.add_argument('--val', type=str, required=True, help="Path to validation dataset.")
     parser.add_argument('--gpus', type=int, default=1)
     parser.add_argument('--fp16', action='store_true', help="Use half-precision.")
     parser.add_argument('--pool', default=1000, type=int, help="How many examples to use in shuffle pool")
     parser.add_argument('--keypoints', default="config/cups.json", help="Keypoint configuration file.")
+    parser.add_argument('--batch-size', default=8, type=int)
+    parser.add_argument('--weight-decay', default=0.01, type=float)
+    parser.add_argument('--features', default=128, type=int, help="Intermediate features in network.")
     return parser.parse_args()
 
 def _to_image(image):
@@ -36,14 +38,16 @@ def _init_worker(worker_id):
     np.random.seed(worker_id)
 
 class KeypointModule(pl.LightningModule):
-    def __init__(self, keypoint_config):
+    def __init__(self, keypoint_config, features=128, weight_decay=0.01):
         super().__init__()
+        self.weight_decay = weight_decay
         self.keypoint_config = keypoint_config
-        self._load_model()
+        self._load_model(features)
         self.loss = KeypointLoss(keypoint_config['keypoint_config'])
+        self.save_hyperparameters()
 
-    def _load_model(self):
-        self.model = KeypointNet([180, 320], heatmaps_out=len(self.keypoint_config["keypoint_config"]) + 1)
+    def _load_model(self, features):
+        self.model = KeypointNet([180, 320], features=features, heatmaps_out=len(self.keypoint_config["keypoint_config"]) + 1)
 
     def forward(self, frame, *args, **kwargs):
         return self.model(frame, *args, **kwargs)
@@ -78,7 +82,7 @@ class KeypointModule(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=3e-4, weight_decay=0.01)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=3e-4, weight_decay=self.weight_decay)
         schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=10)
         return {
             'scheduler': schedule,
@@ -143,7 +147,7 @@ def main():
     with open(flags.keypoints) as f:
         keypoint_config = json.load(f)
     data_module = DataModule(flags, keypoint_config)
-    module = KeypointModule(keypoint_config)
+    module = KeypointModule(keypoint_config, features=flags.features, weight_decay=flags.weight_decay)
 
     trainer = pl.Trainer(
             gpus=flags.gpus,

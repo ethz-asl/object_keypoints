@@ -16,8 +16,8 @@ import albumentations as A
 
 heatmap_size = 64
 center_radius = heatmap_size / 16.0
-kernel_size = int(heatmap_size / 16.0)
-default_length_scale = heatmap_size / 64.0
+kernel_size = int(heatmap_size / 8.0)
+default_length_scale = heatmap_size / 50.0
 
 @jit(nopython=True)
 def _gaussian_kernel(x, y, length_scale):
@@ -87,6 +87,8 @@ class StereoVideoDataset(IterableDataset):
         augmentations = []
         if augment:
             augmentations += [A.RandomResizedCrop(height=self.image_size[0], width=self.image_size[1], scale=(0.7, 1.0), ratio=(1.0, 1.0)),
+                    A.Cutout(max_h_size=25, max_w_size=25, p=0.5),
+                    A.Rotate(),
                     A.HorizontalFlip(p=0.5),
                     A.VerticalFlip(p=0.5)]
         else:
@@ -96,8 +98,10 @@ class StereoVideoDataset(IterableDataset):
         if augment_color:
             augmentations += [A.RandomBrightnessContrast(p=0.25),
                     A.RandomGamma(p=0.25),
-                    A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=25, val_shift_limit=25, p=0.25),
-                    A.GaussNoise(p=0.5)]
+                    A.ColorJitter(),
+                    A.MotionBlur(),
+                    A.GaussianBlur(p=0.25),
+                    A.GaussNoise(p=0.25)]
 
         self.augmentations = A.Compose(augmentations, additional_targets=targets, keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
         self.mean = RGB_MEAN
