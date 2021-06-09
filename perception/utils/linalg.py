@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 def skew_matrix(v):
     return np.array([[0.0, -v[2], v[1]],
@@ -17,3 +18,6 @@ def transform_points(T, points):
     points: ... x 3 numpy matrix
     """
     return (T[:3, :3] @ points[..., None])[..., 0] + T[:3, 3]
+
+def angle_between(R1, R2):
+    return Rotation.from_matrix(R1.T @ R2).as_euler('xyz', degrees=False)

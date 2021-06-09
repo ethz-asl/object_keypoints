@@ -20,12 +20,12 @@ class FocalLoss(_Loss):
         ) * bce
 
 class KeypointLoss(_Loss):
-    def __init__(self, keypoint_config, size_average=None, reduce=None, reduction='mean'):
+    def __init__(self, keypoint_config, center_weight=1.0, size_average=None, reduce=None, reduction='mean'):
         super().__init__(size_average, reduce, reduction)
         self.keypoint_config = keypoint_config
         self.n_keypoint_maps = len(keypoint_config) + 1 # Add one for center map.
         self.focal_loss = FocalLoss()
-        self.center_weight = 1.0
+        self.center_weight = center_weight
         if reduction == 'mean':
             self.reduce = torch.mean
         elif reduction == 'sum':
