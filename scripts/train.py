@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 import json
+import random
 from matplotlib import pyplot as plt
 from albumentations.augmentations import transforms
 from perception.models import nms
@@ -10,7 +11,6 @@ import albumentations as A
 from torch.utils.data import DataLoader
 from perception.loss import KeypointLoss
 from perception.datasets.video import StereoVideoDataset
-from perception.datasets.utils import RoundRobin, SamplingPool, Chain
 from perception.models import KeypointNet
 import pytorch_lightning as pl
 
@@ -26,6 +26,7 @@ def read_args():
     parser.add_argument('--batch-size', default=8, type=int)
     parser.add_argument('--weight-decay', default=0.01, type=float)
     parser.add_argument('--features', default=128, type=int, help="Intermediate features in network.")
+    parser.add_argument('--center-weight', default=10.0, help="Weight for center loss vs. heatmap loss.")
     return parser.parse_args()
 
 def _to_image(image):
@@ -35,15 +36,16 @@ def _to_image(image):
     return np.clip((image * 255.0).round(), 0.0, 255.0).astype(np.uint8)
 
 def _init_worker(worker_id):
+    random.seed(worker_id)
     np.random.seed(worker_id)
 
 class KeypointModule(pl.LightningModule):
-    def __init__(self, keypoint_config, features=128, weight_decay=0.01):
+    def __init__(self, keypoint_config, features=128, weight_decay=0.01, center_weight=10.0):
         super().__init__()
         self.weight_decay = weight_decay
         self.keypoint_config = keypoint_config
         self._load_model(features)
-        self.loss = KeypointLoss(keypoint_config['keypoint_config'])
+        self.loss = KeypointLoss(keypoint_config['keypoint_config'], center_weight=center_weight)
         self.save_hyperparameters()
 
     def _load_model(self, features):
@@ -129,8 +131,9 @@ class DataModule(pl.LightningDataModule):
                 train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=False, augment_color=True, camera=camera)
             val_datasets = (_build_datasets(self.val_sequences, camera=0, keypoint_config=self.keypoint_config, augment=False, include_pose=True) +
                     _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, camera=1, include_pose=True))
-            self.train = SamplingPool(Chain(train_datasets, shuffle=True, infinite=True), self.flags.pool)
-            self.val = Chain(val_datasets, shuffle=True)
+            train = torch.utils.data.ChainDataset(train_datasets)
+            self.train = torch.utils.data.BufferedShuffleDataset(train, self.flags.pool)
+            self.val = torch.utils.data.ChainDataset(val_datasets)
         else:
             raise NotImplementedError()
 
@@ -147,7 +150,10 @@ def main():
     with open(flags.keypoints) as f:
         keypoint_config = json.load(f)
     data_module = DataModule(flags, keypoint_config)
-    module = KeypointModule(keypoint_config, features=flags.features, weight_decay=flags.weight_decay)
+    module = KeypointModule(keypoint_config,
+            center_weight=flags.center_weight,
+            features=flags.features,
+            weight_decay=flags.weight_decay)
 
     trainer = pl.Trainer(
             gpus=flags.gpus,

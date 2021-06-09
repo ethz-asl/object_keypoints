@@ -319,6 +319,9 @@ class LabelingApp:
         x = cv2.fisheye.undistortPoints(x[None, None, :, 0], self.K, self.D, P=self.K).ravel()[:, None]
         xp = cv2.fisheye.undistortPoints(xp[None, None, :, 0], self.Kp, self.Dp, P=self.Kp).ravel()[:, None]
 
+        F = camera_utils.fundamental_matrix(T_RL, self.K, self.Kp)
+        x, xp = cv2.correctMatches(F, x.T[None], xp.T[None])
+
         p_LK = cv2.triangulatePoints(P1, P2, x, xp)
         p_LK = p_LK / p_LK[3]
         p_WK = T_WL @ p_LK
@@ -358,6 +361,7 @@ def main():
         sequence_directories = [flags.base_dir]
     else:
         sequence_directories = [os.path.join(flags.base_dir, d) for d in os.listdir(flags.base_dir)]
+        sequence_directories.sort()
     for path in sequence_directories:
         print(f"Labeling: {path}")
         app.set_current(path)
