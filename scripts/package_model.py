@@ -3,21 +3,25 @@ import os
 import torch
 import json
 from train import KeypointModule
+import yaml
+from pathlib import Path
 
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str)
     parser.add_argument('--out', type=str, required=True)
-    parser.add_argument('--keypoints', type=str, default='./config/cups.json')
     return parser.parse_args()
 
+def load_hparams(path):
+    version_dir = Path(path).parent.parent.absolute()
+    with open(os.path.join(version_dir, 'hparams.yaml'), 'rt') as f:
+        params = yaml.load(f.read(), Loader=yaml.SafeLoader)
+    return params
+
 class Model(torch.nn.Module):
-    def __init__(self, flags):
+    def __init__(self, flags, hparams):
         super().__init__()
-        with open(flags.keypoints) as f:
-            keypoint_config = json.load(f)
-        self.model = KeypointModule.load_from_checkpoint(flags.model,
-                keypoint_config=keypoint_config).model
+        self.model = KeypointModule.load_from_checkpoint(flags.model, **hparams).model
 
     def forward(self, x):
         heatmap, centers = self.model(x)
@@ -26,7 +30,8 @@ class Model(torch.nn.Module):
 
 def main():
     flags = read_args()
-    model = Model(flags).eval().cuda()
+    hparams = load_hparams(flags.model)
+    model = Model(flags, hparams).eval().cuda()
 
     dummy_input = torch.randn(2, 3, 511, 511).cuda()
     input_names = ["frames"]

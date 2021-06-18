@@ -12,8 +12,9 @@ import timm
 
 def prediction_module(int_features, features_out):
     return nn.Sequential(
-        convolution(1, 256, int_features, with_bn=False),
-        nn.Conv2d(int_features, features_out, (1, 1))
+        convolution(1, 256, int_features, with_bn=True),
+        convolution(1, int_features, 32, with_bn=True),
+        nn.Conv2d(32, features_out, (1, 1), bias=True)
     )
 
 class HeatmapHead(nn.Module):
@@ -46,11 +47,12 @@ def nms(x, size=5):
     return x * keep
 
 class KeypointNet(nn.Module):
-    def __init__(self, output_size, features=128, heatmaps_out=2):
+    def __init__(self, output_size, features=128, heatmaps_out=2, dropout=0.1):
         super().__init__()
         self.backbone = self._build_hourglass()
         self.heatmap_head = HeatmapHead(features, heatmaps_out)
         self.center_head = CenterHead(features, heatmaps_out)
+        self.dropout = nn.Dropout(p=dropout)
 
     def _build_hourglass(self):
         corner_net = CornerNet_Squeeze.model()
@@ -64,7 +66,7 @@ class KeypointNet(nn.Module):
         return net.model.module.hg
 
     def forward(self, x):
-        features = self.backbone(x)
+        features = [self.dropout(f) for f in self.backbone(x)]
         heatmaps_out = self.heatmap_head(features)
         centers_out = self.center_head(features)
         return heatmaps_out, centers_out

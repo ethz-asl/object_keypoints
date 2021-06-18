@@ -21,8 +21,10 @@ default_length_scale = heatmap_size / 64.0
 
 @jit(nopython=True)
 def _gaussian_kernel(x, y, length_scale):
-    return np.exp(-np.linalg.norm(x - y)**2 / length_scale**2)
+    norm = np.power(x - y, 2).sum(axis=-1)
+    return np.exp(-norm / length_scale**2)
 
+@jit(nopython=True)
 def _compute_kernel(size, center, length_scale=default_length_scale):
     center = np.array([center, center], dtype=np.float32)
     kernel = np.zeros((size, size), dtype=np.float32)
@@ -39,7 +41,6 @@ def _pixel_indices(height, width):
             out[:, i, j] = np.array([j + 0.5, i + 0.5])
     return out
 
-@jit(nopython=True)
 def _set_keypoints(heatmap, indices, length_scale=default_length_scale):
     for index in indices:
         int_x, int_y = index.astype(np.int32)
@@ -103,14 +104,16 @@ class StereoVideoDataset(IterableDataset):
         self.mean = RGB_MEAN
         self.std = RGB_STD
 
-    def __len__(self):
         with h5py.File(self.metadata_path, 'r') as f:
             if self.camera == self.LEFT:
-                return f['left/camera_transform'].shape[0]
+                self.poses = f['left/camera_transform'][:]
             elif self.camera == self.RIGHT:
-                return f['right/camera_transform'].shape[0]
+                self.poses = f['right/camera_transform'][:]
             else:
                 raise ValueError("Camera needs to be 0 or 1.")
+
+    def __len__(self):
+        return self.poses.shape[0]
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
@@ -191,14 +194,8 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
         video_file = os.path.join(self.base_dir, video_file)
         video = video_io.vreader(video_file)
         try:
-            with h5py.File(self.metadata_path, 'r') as f:
-                if self.camera == self.LEFT:
-                    poses = f['left/camera_transform']
-                elif self.camera == self.RIGHT:
-                    poses = f['right/camera_transform']
-
-                for i, frame in enumerate(video):
-                    yield self._extract_example(poses[i], frame)
+            for i, frame in enumerate(video):
+                yield self._extract_example(self.poses[i], frame)
         finally:
             video.close()
 
@@ -234,7 +231,7 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
 
         frame = torch.tensor((out['image'].astype(np.float32).transpose([2, 0, 1]) / 255.0 - self.mean[:, None, None]) / self.std[:, None, None])
 
-        target = torch.clamp(target / self.kernel_max, 0.0, 1.0)
+        target = torch.clamp(target, 0.0, 1.0)
         if not self.include_pose:
             return frame, target, centers
         else:

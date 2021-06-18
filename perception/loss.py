@@ -13,7 +13,7 @@ class FocalLoss(_Loss):
         N = target.shape[0]
         bce = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
         p = torch.sigmoid(pred)
-        mask = (target > 0.99).float()
+        mask = (target > 0.75).float()
         return (
             mask * torch.pow(1.0 - p, self.alpha) +
             (1.0 - mask) * torch.pow(1.0 - target, self.beta) * torch.pow(p, self.alpha)
@@ -41,6 +41,7 @@ class KeypointLoss(_Loss):
         heatmap_loss = 0.0
         center_loss = 0.0
         heatmap_losses = []
+        N = float(gt_heatmaps.shape[0])
         center_losses = []
         for p_hm, p_center in zip(p_heatmaps, p_centers):
             loss = self.focal_loss(p_hm, gt_heatmaps).sum(dim=[1,2,3]).mean()
@@ -49,8 +50,8 @@ class KeypointLoss(_Loss):
 
             where_heat = gt_heatmaps > 0.01
             where_heat = where_heat[:, 1:, None].expand(-1, -1, 2, -1, -1)
-            center_l1 = F.l1_loss(p_center[where_heat], gt_centers[where_heat], reduction='sum')
-            center_loss += center_l1
+            center_l1 = F.smooth_l1_loss(p_center[where_heat], gt_centers[where_heat], reduction='sum')
+            center_loss += center_l1 / N
             center_losses.append(center_l1)
 
         loss = heatmap_loss + self.center_weight * center_loss

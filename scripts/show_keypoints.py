@@ -142,6 +142,7 @@ class PointVisualizer:
         for directory in directories:
             try:
                 view_model = ViewModel(self.flags, os.path.join(self.flags.base_dir, directory))
+                print(f"Sequence {directory}")
                 for left_frame, left_points, right_frame, right_points in view_model:
                     print(f"Current frame {view_model.current_frame}, num frames: {view_model.num_frames}" + 5 * " ", end="\r")
                     self.left_image_pane.set_texture(left_frame)

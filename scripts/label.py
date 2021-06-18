@@ -148,9 +148,11 @@ class LabelingApp:
 
     def set_current(self, path):
         self.done = False
-        self.left_backprojected_points.clear_points()
         self.left_keypoints = []
         self.right_keypoints = []
+        self.world_points = []
+        self.left_backprojected_points.clear_points()
+        self.right_backprojected_points.clear_points()
         self.left_points.clear_points()
         self.right_points.clear_points()
 
@@ -212,6 +214,8 @@ class LabelingApp:
         self.D = np.array(left['distortion_coeffs'])
         self.Dp = np.array(right['distortion_coeffs'])
         self.Kp = camera_utils.camera_matrix(right['intrinsics'])
+        self.left_camera = camera_utils.FisheyeCamera(self.K, self.D, left['resolution'][::-1])
+        self.right_camera = camera_utils.FisheyeCamera(self.Kp, self.Dp, right['resolution'][::-1])
 
     def _left_pane_clicked(self, event):
         command = AddLeftPointCommand(event.p, self.left_image_pane.get_rect())

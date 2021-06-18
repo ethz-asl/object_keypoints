@@ -26,7 +26,9 @@ def read_args():
     parser.add_argument('--batch-size', default=8, type=int)
     parser.add_argument('--weight-decay', default=0.01, type=float)
     parser.add_argument('--features', default=128, type=int, help="Intermediate features in network.")
-    parser.add_argument('--center-weight', default=10.0, help="Weight for center loss vs. heatmap loss.")
+    parser.add_argument('--center-weight', default=1.0, help="Weight for center loss vs. heatmap loss.")
+    parser.add_argument('--lr', default=4e-3, type=float, help="Learning rate.")
+    parser.add_argument('--dropout', default=0.1)
     return parser.parse_args()
 
 def _to_image(image):
@@ -40,16 +42,17 @@ def _init_worker(worker_id):
     np.random.seed(worker_id)
 
 class KeypointModule(pl.LightningModule):
-    def __init__(self, keypoint_config, features=128, weight_decay=0.01, center_weight=10.0):
+    def __init__(self, keypoint_config, lr=3e-4, features=128, dropout=0.1, weight_decay=0.01, center_weight=10.0):
         super().__init__()
+        self.lr = lr
         self.weight_decay = weight_decay
         self.keypoint_config = keypoint_config
-        self._load_model(features)
+        self._load_model(features, dropout)
         self.loss = KeypointLoss(keypoint_config['keypoint_config'], center_weight=center_weight)
         self.save_hyperparameters()
 
-    def _load_model(self, features):
-        self.model = KeypointNet([180, 320], features=features, heatmaps_out=len(self.keypoint_config["keypoint_config"]) + 1)
+    def _load_model(self, features, dropout):
+        self.model = KeypointNet([180, 320], features=features, dropout=dropout, heatmaps_out=len(self.keypoint_config["keypoint_config"]) + 1)
 
     def forward(self, frame, *args, **kwargs):
         return self.model(frame, *args, **kwargs)
@@ -75,7 +78,8 @@ class KeypointModule(pl.LightningModule):
         loss = self._validation_loss(heatmaps, target, keypoints)
         val_loss, heatmap_losses, center_losses = self.loss(heatmaps, target, p_centers, gt_centers)
 
-        self.log('val_loss', val_loss)
+        self.log('val_loss', loss)
+        self.log('total_heatmap_loss', val_loss)
         self.log('val_heatmap_loss1', heatmap_losses[0])
         self.log('val_heatmap_loss2', heatmap_losses[1])
         self.log('val_center_loss1', center_losses[0])
@@ -84,8 +88,8 @@ class KeypointModule(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=3e-4, weight_decay=self.weight_decay)
-        schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=10)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=10, verbose=True)
         return {
             'scheduler': schedule,
             'interval': 'epoch',
@@ -98,10 +102,7 @@ class KeypointModule(pl.LightningModule):
         # heatmaps: N x K x H x W
         # target: N x n_objects x K x 2
         p_heatmap = torch.sigmoid(p_heatmaps[-1])
-        loss = torch.nn.functional.l1_loss(p_heatmap, gt_heatmap)
-
-        self.log('val_heatmap_l1', loss)
-        return loss
+        return torch.nn.functional.l1_loss(p_heatmap, gt_heatmap)
 
 def _build_datasets(sequences, **kwargs):
     datasets = []
@@ -151,11 +152,17 @@ def main():
         keypoint_config = json.load(f)
     data_module = DataModule(flags, keypoint_config)
     module = KeypointModule(keypoint_config,
+            lr=flags.lr,
             center_weight=flags.center_weight,
             features=flags.features,
+            dropout=flags.dropout,
             weight_decay=flags.weight_decay)
 
+    from pytorch_lightning.callbacks import ModelCheckpoint
+    checkpoint_cb = ModelCheckpoint(monitor='val_loss',
+            save_top_k=3)
     trainer = pl.Trainer(
+            callbacks=[checkpoint_cb],
             gpus=flags.gpus,
             reload_dataloaders_every_epoch=False,
             precision=16 if flags.fp16 else 32)

@@ -55,7 +55,7 @@ class Sequence:
         self._read_keypoints()
 
     def _loader(self, dataset):
-        return DataLoader(dataset, num_workers=0 if self.flags.debug else 1, batch_size=1, pin_memory=not self.flags.cpu and torch.cuda.is_available())
+        return DataLoader(dataset, num_workers=0 if self.flags.debug else 1, batch_size=1, pin_memory=not self.flags.cpu and torch.cuda.is_available() and not self.flags.ground_truth)
 
     def _read_keypoints(self):
         self.world_points = self.dataset_left.world_points.reshape(self.dataset_left.n_objects, self.dataset_left.n_keypoints, 3)
@@ -86,11 +86,11 @@ class Sequence:
 
     def project_points_left(self, p_LK):
         p_LK = np.concatenate(p_LK, axis=0)
-        return self.left_camera.project(p_LK)
+        return self.left_camera.project(p_LK) + 0.5
 
     def project_points_right(self, p_LK):
         p_LK = np.concatenate(p_LK, axis=0)
-        return self.right_camera.project(p_LK, self.stereo_camera.T_RL)
+        return self.right_camera.project(p_LK, self.stereo_camera.T_RL) + 0.5
 
 object_color_maps = [cm.get_cmap('Reds'), cm.get_cmap('Purples'), cm.get_cmap('Greens'), cm.get_cmap('Blues'), cm.get_cmap('Oranges')]
 n_colormaps = len(object_color_maps)
@@ -333,6 +333,9 @@ class Runner:
         rate = Rate(30)
         for i, ((left_frame, l_target, l_centers, T_WL, l_keypoints), (right_frame, r_target, r_centers, T_WR, r_keypoints)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
             N = left_frame.shape[0]
+
+            sequence.stereo_camera_small.T_RL = linalg.inv_transform(T_WR[0].numpy()) @ T_WL[0].numpy()
+            self.pipeline.reset(sequence.stereo_camera_small)
             if self.flags.ground_truth:
                 objects = self.pipeline(l_target, l_centers, r_target, r_centers)
                 heatmap_left = self._to_heatmap(l_target[0].numpy())
@@ -341,8 +344,6 @@ class Runner:
                 objects, heatmaps = self.pipeline(left_frame, right_frame)
                 heatmap_left = self._to_heatmap(heatmaps[0][0].numpy())
                 heatmap_right = self._to_heatmap(heatmaps[1][0].numpy())
-                heatmap_left[heatmap_left < 0.25] = 0.0
-                heatmap_right[heatmap_right < 0.25] = 0.0
 
             self.results.add(T_WL[0].numpy(), T_WR[0].numpy(), objects, sequence.world_points)
 
@@ -370,8 +371,8 @@ class Runner:
                         p_left = sequence.project_points_left(p_LK)
                         p_right = sequence.project_points_right(p_LK)
                     else:
-                        p_left = np.concatenate([p for p in obj['keypoints_left'] if p.size != 0], axis=0)
-                        p_right = np.concatenate([p for p in obj['keypoints_right'] if p.size != 0], axis=0)
+                        p_left = np.concatenate([p + 0.5 for p in obj['keypoints_left'] if p.size != 0], axis=0)
+                        p_right = np.concatenate([p + 0.5 for p in obj['keypoints_right'] if p.size != 0], axis=0)
                         p_left = sequence.to_image_points(p_left)
                         p_right = sequence.to_image_points(p_right)
                     points_left.append(p_left)

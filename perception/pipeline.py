@@ -6,8 +6,9 @@ from perception.utils import camera_utils, clustering_utils, linalg
 from scipy.spatial.transform import Rotation
 from perception.models import nms
 from sklearn import metrics
-import skimage
-from scipy import ndimage
+
+from perception.datasets.video import _gaussian_kernel, default_length_scale
+from numba import jit
 
 class InferenceComponent:
     name = "inference"
@@ -60,8 +61,8 @@ class KeypointExtractionComponent:
             y_end = min(y + 3, height)
             p = probabilities[y_start:y_end, x_start:x_end]
             local_indices = self.image_indices[y_start:y_end, x_start:x_end]
-            index = (p[:, :, None] * local_indices).sum(dim=[0, 1]) / p.sum()
-            points.append(index.numpy())
+            index = ((p[:, :, None] * local_indices).sum(dim=[0, 1]) / p.sum()).numpy()
+            points.append(index)
             confidences.append(p.sum())
         return points, confidences
 
@@ -77,7 +78,7 @@ class KeypointExtractionComponent:
             indices = self.image_indices[surpressed[0, 0] > 1.0]
             points, confidence = self._compute_points(indices, probabilities[0, 0])
 
-            points = [x[::-1] + 0.5 for x in points]
+            points = [x[::-1] for x in points]
             out_points.append(points)
             confidences.append(confidence)
         return out_points, confidences
