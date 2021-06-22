@@ -58,30 +58,34 @@ class KeypointModule(pl.LightningModule):
         return self.model(frame, *args, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        frame, target, gt_centers = batch
-        heatmaps, p_centers = self(frame)
+        frame, target, depth, gt_centers = batch
+        heatmaps, p_depth, p_centers = self(frame)
 
-        loss, heatmap_losses, center_losses = self.loss(heatmaps, target, p_centers, gt_centers)
+        loss, heatmap_losses, depth_losses, center_losses = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
 
         self.log('train_loss', loss)
         self.log('heatmap_loss1', heatmap_losses[0])
         self.log('heatmap_loss2', heatmap_losses[1])
+        self.log('depth_loss1', depth_losses[0])
+        self.log('depth_loss2', depth_losses[1])
         self.log('center_loss1', center_losses[0])
         self.log('center_loss2', center_losses[1])
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        frame, target, gt_centers, _, keypoints = batch
-        heatmaps, p_centers = self(frame)
+        frame, target, depth, gt_centers, _, keypoints = batch
+        heatmaps, p_depth, p_centers = self(frame)
 
         loss = self._validation_loss(heatmaps, target, keypoints)
-        val_loss, heatmap_losses, center_losses = self.loss(heatmaps, target, p_centers, gt_centers)
+        val_loss, heatmap_losses, depth_losses, center_losses = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
 
         self.log('val_loss', loss)
         self.log('total_heatmap_loss', val_loss)
         self.log('val_heatmap_loss1', heatmap_losses[0])
         self.log('val_heatmap_loss2', heatmap_losses[1])
+        self.log('val_depth_loss1', depth_losses[0])
+        self.log('val_depth_loss2', depth_losses[1])
         self.log('val_center_loss1', center_losses[0])
         self.log('val_center_loss2', center_losses[1])
 

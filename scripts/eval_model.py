@@ -331,28 +331,28 @@ class Runner:
         self.results.set_calibration(sequence.stereo_camera_small)
 
         rate = Rate(30)
-        for i, ((left_frame, l_target, l_centers, T_WL, l_keypoints), (right_frame, r_target, r_centers, T_WR, r_keypoints)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
+        for i, ((left_frame, l_target, l_depth, l_centers, T_WL, l_keypoints), (right_frame, r_target, r_depth, r_centers, T_WR, r_keypoints)) in enumerate(zip(sequence.left_loader, sequence.right_loader)):
             N = left_frame.shape[0]
 
             sequence.stereo_camera_small.T_RL = linalg.inv_transform(T_WR[0].numpy()) @ T_WL[0].numpy()
             self.pipeline.reset(sequence.stereo_camera_small)
+
             if self.flags.ground_truth:
-                objects = self.pipeline(l_target, l_centers, r_target, r_centers)
+                objects = self.pipeline(l_target, l_depth, l_centers)
                 heatmap_left = self._to_heatmap(l_target[0].numpy())
-                heatmap_right = self._to_heatmap(r_target[0].numpy())
+                # heatmap_right = self._to_heatmap(r_target[0].numpy())
             else:
                 objects, heatmaps = self.pipeline(left_frame, right_frame)
                 heatmap_left = self._to_heatmap(heatmaps[0][0].numpy())
-                heatmap_right = self._to_heatmap(heatmaps[1][0].numpy())
+                # heatmap_right = self._to_heatmap(heatmaps[1][0].numpy())
 
             self.results.add(T_WL[0].numpy(), T_WR[0].numpy(), objects, sequence.world_points)
 
             left_frame = left_frame.cpu().numpy()[0]
             right_frame = right_frame.cpu().numpy()[0]
             left_rgb = self._to_image(left_frame)
-            right_rgb = self._to_image(right_frame)
             image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
-            image_right = (0.3 * right_rgb + 0.7 * heatmap_right).astype(np.uint8)
+            image_right = self._to_image(right_frame).astype(np.uint8)
 
             points_left = []
             points_right = []
@@ -361,9 +361,9 @@ class Runner:
                     if len(obj['centers_left']) > 0:
                         left = sequence.to_image_points(np.concatenate([c[None] for c in obj['centers_left']]))
                         points_left.append(left)
-                    if len(obj['centers_right']) > 0:
-                        right = sequence.to_image_points(np.concatenate([c[None] for c in obj['centers_right']]))
-                        points_right.append(right)
+                    # if len(obj['centers_right']) > 0:
+                    #     right = sequence.to_image_points(np.concatenate([c[None] for c in obj['centers_right']]))
+                    #     points_right.append(right)
             else:
                 for obj in objects:
                     if self.flags.world:

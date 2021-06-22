@@ -7,6 +7,7 @@ class FisheyeCamera:
     def __init__(self, K, D, image_size):
         # Camera matrix
         self.K = K
+        self.Kinv = np.linalg.inv(K)
         # Distortion parameters
         self.D = D
         # height, width
@@ -35,6 +36,11 @@ class FisheyeCamera:
         x, _ = cv2.fisheye.projectPoints(X[:, None, :], R, T_CW[:3, 3], self.K, self.D)
         x = x[:, 0]
         return x
+
+    def unproject(self, xys, zs):
+        xs = np.concatenate([xys, np.ones((xys.shape[0], 1))], axis=1)
+        X = self.Kinv @ xs[:, :, None] * zs
+        return X[:, :, 0]
 
     def in_frame(self, x):
         """

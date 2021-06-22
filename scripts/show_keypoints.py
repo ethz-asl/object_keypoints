@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 import constants
 import yaml
+import random
 from skvideo import io as video_io
 from perception.utils import camera_utils, Rate, linalg
 hud.set_data_directory(os.path.dirname(hud.__file__))
@@ -17,6 +18,7 @@ def read_args():
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
     parser.add_argument('--calibration', default='config/calibration.yaml', help="Calibration yaml file.")
     parser.add_argument('--rate', '-r', default=30, help="Frames per second.")
+    parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
 KEYPOINT_FILENAME = 'keypoints.json'
@@ -137,8 +139,10 @@ class PointVisualizer:
             self.paused = not self.paused
 
     def run(self):
+        random.seed(self.flags.seed)
         rate = Rate(self.flags.rate)
         directories = os.listdir(self.flags.base_dir)
+        random.shuffle(directories)
         for directory in directories:
             try:
                 view_model = ViewModel(self.flags, os.path.join(self.flags.base_dir, directory))
