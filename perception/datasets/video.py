@@ -89,6 +89,9 @@ class StereoVideoDataset(IterableDataset):
         if augment:
             augmentations += [A.SmallestMaxSize(max_size=max(self.image_size)),
                     A.CenterCrop(height=self.image_size[0], width=self.image_size[1]),
+                    A.RandomBrightnessContrast(p=1.0),
+                    A.RandomGamma(p=1.0),
+                    A.CLAHE(p=0.1),
                     A.Cutout(max_h_size=25, max_w_size=25, p=0.5),
                     A.HorizontalFlip(p=0.5),
                     A.VerticalFlip(p=0.5)]
@@ -272,12 +275,13 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
         for object_index in range(self.n_objects):
             keypoint_index = 0
             for i, points_in_map in enumerate(self.keypoint_config):
-                p_C = points_3d[object_index, keypoint_index]
-                current_keypoint = keypoints[object_index, keypoint_index]
-                distance_to_keypoint = np.linalg.norm(current_keypoint[:, None, None] - self.target_pixel_indices, axis=0)
-                within_range = distance_to_keypoint < center_radius
-                depth_map[i][within_range] = p_C[2]
-                keypoint_index += 1
+                for _ in range(points_in_map):
+                    p_C = points_3d[object_index, keypoint_index]
+                    current_keypoint = keypoints[object_index, keypoint_index]
+                    distance_to_keypoint = np.linalg.norm(current_keypoint[:, None, None] - self.target_pixel_indices, axis=0)
+                    within_range = distance_to_keypoint < center_radius
+                    depth_map[i][within_range] = p_C[2]
+                    keypoint_index += 1
 
         return depth_map
 

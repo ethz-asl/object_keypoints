@@ -342,8 +342,8 @@ class Runner:
                 heatmap_left = self._to_heatmap(l_target[0].numpy())
                 # heatmap_right = self._to_heatmap(r_target[0].numpy())
             else:
-                objects, heatmaps = self.pipeline(left_frame, right_frame)
-                heatmap_left = self._to_heatmap(heatmaps[0][0].numpy())
+                objects, heatmap = self.pipeline(left_frame)
+                heatmap_left = self._to_heatmap(heatmap[0].numpy())
                 # heatmap_right = self._to_heatmap(heatmaps[1][0].numpy())
 
             self.results.add(T_WL[0].numpy(), T_WR[0].numpy(), objects, sequence.world_points)
@@ -371,8 +371,8 @@ class Runner:
                         p_left = sequence.project_points_left(p_LK)
                         p_right = sequence.project_points_right(p_LK)
                     else:
-                        p_left = np.concatenate([p + 0.5 for p in obj['keypoints_left'] if p.size != 0], axis=0)
-                        p_right = np.concatenate([p + 0.5 for p in obj['keypoints_right'] if p.size != 0], axis=0)
+                        p_left = np.concatenate([p + 1.0 for p in obj['keypoints_left'] if p.size != 0], axis=0)
+                        p_right = np.concatenate([p + 1.0 for p in obj['keypoints_right'] if p.size != 0], axis=0)
                         p_left = sequence.to_image_points(p_left)
                         p_right = sequence.to_image_points(p_right)
                     points_left.append(p_left)

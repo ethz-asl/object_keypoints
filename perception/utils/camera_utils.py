@@ -39,8 +39,16 @@ class FisheyeCamera:
 
     def unproject(self, xys, zs):
         xs = np.concatenate([xys, np.ones((xys.shape[0], 1))], axis=1)
-        X = self.Kinv @ xs[:, :, None] * zs
-        return X[:, :, 0]
+        X = (self.Kinv @ xs[:, :, None])[:, :, 0] * zs[:, None]
+        return X
+
+    def undistort(self, xy):
+        """
+        xy: N x 2 image points
+        returns: N x 2 undistorted image points.
+        """
+        return cv2.fisheye.undistortPoints(xy[:, None, :], self.K, self.D,
+                P=self.K)[:, 0, :]
 
     def in_frame(self, x):
         """

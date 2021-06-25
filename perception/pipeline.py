@@ -21,16 +21,11 @@ class InferenceComponent:
         else:
             self.model = model.cpu().float()
 
-    def __call__(self, left_frames, right_frames):
-        N = left_frames.shape[0]
+    def __call__(self, frames):
         if self.cuda:
-            frames = torch.cat([left_frames, right_frames], 0).cuda()
-        else:
-            frames = torch.cat([left_frames, right_frames], 0)
-        heatmaps, centers = [t.cpu() for t in self.model(frames)]
-        left = heatmaps[:N], centers[:N]
-        right = heatmaps[N:], centers[N:]
-        return left, right
+            frames = frames.cuda()
+        heatmaps, depth, centers = [t.cpu() for t in self.model(frames)]
+        return heatmaps, depth, centers
 
 class KeypointExtractionComponent:
     name = "keypoints"
@@ -220,11 +215,15 @@ class DetectionToPoint:
 
     def reset(self, camera):
         self.camera = camera
+        self.min_index = np.zeros(2, dtype=np.int)
+        self.max_index = camera.image_size.astype(np.int) - 1
 
     def __call__(self, xy, p_depth):
         if xy.shape[0] == 0:
             return None
+        xy = self.camera.undistort(xy)
         xy_int = xy.round().astype(np.int)
+        xy_int = np.clip(xy_int, self.min_index, self.max_index)
         zs = p_depth[xy_int[:, 1], xy_int[:, 0]]
         return self.camera.unproject(xy, zs)
 
@@ -262,9 +261,7 @@ class LearnedKeypointTrackingPipeline(ObjectKeypointPipeline):
         super().__init__(*args, **kwargs)
         self.inference = InferenceComponent(model, cuda)
 
-    def __call__(self, left_frame, right_frame):
-        left, right = self.inference(left_frame, right_frame)
-        l_hm, l_c = left
-        r_hm, r_c = right
-        return super().__call__(l_hm, l_c, r_hm, r_c), (l_hm, r_hm)
+    def __call__(self, frame):
+        heatmap, depth, centers = self.inference(frame)
+        return super().__call__(heatmap, depth, centers), heatmap
 
