@@ -12,7 +12,7 @@ class FocalLoss(_Loss):
         N = target.shape[0]
         bce = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
         p = torch.sigmoid(pred)
-        mask = (target > 0.75).float()
+        mask = (target > 0.95).float()
         return (
             mask * torch.pow(1.0 - p, self.alpha) +
             (1.0 - mask) * torch.pow(1.0 - target, self.beta) * torch.pow(p, self.alpha)

@@ -228,12 +228,13 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
 
         centers = self._compute_centers(keypoints)
 
+        heatmap_max = np.maximum(target.max(axis=2).max(axis=1), 0.5)
+        target = np.clip(target / heatmap_max[:, None, None], 0.0, 1.0)
         target = torch.tensor(target)
         centers = torch.tensor(centers)
 
         frame = torch.tensor((out['image'].astype(np.float32).transpose([2, 0, 1]) / 255.0 - self.mean[:, None, None]) / self.std[:, None, None])
 
-        target = torch.clamp(target, 0.0, 1.0)
         if not self.include_pose:
             return frame, target, centers
         else:
