@@ -28,7 +28,7 @@ def read_args():
     parser.add_argument('--features', default=128, type=int, help="Intermediate features in network.")
     parser.add_argument('--center-weight', default=1.0, help="Weight for center loss vs. heatmap loss.")
     parser.add_argument('--lr', default=4e-3, type=float, help="Learning rate.")
-    parser.add_argument('--dropout', default=0.1)
+    parser.add_argument('--dropout', default=0.1, type=float)
     return parser.parse_args()
 
 def _to_image(image):
@@ -160,7 +160,7 @@ def main():
 
     from pytorch_lightning.callbacks import ModelCheckpoint
     checkpoint_cb = ModelCheckpoint(monitor='val_loss',
-            save_top_k=3)
+            save_top_k=1)
     trainer = pl.Trainer(
             callbacks=[checkpoint_cb],
             gpus=flags.gpus,
