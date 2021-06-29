@@ -4,7 +4,7 @@ This repository contains a toolkit for collecting, labeling and tracking object 
 
 The project allows collecting images from multiple viewpoints using a robot with a wrist mounted camera. These image sequences can then be labeled using a labeling tool StereoLabel.
 
-![StereoLabel image labeling](assets/images/stereo_label.jpg)
+![StereoLabel keypoint labeling](assets/images/stereolabel.jpg)
 
 Once the images are labeled, a model can be learned to detect keypoints in the images and compute 3D keypoints in the camera's coordinate frame using our tracking pipeline.
 
@@ -52,18 +52,18 @@ First decide how many keypoints you will use for your object class and what thei
 ```
 { "keypoint_config": [1, 3] }
 ```
-What this means, is that the is first going to be one keypoint of the first type and then three keypoint of the next type.
+What this means, is that there will first be a keypoint of the first type and then three keypoints of the next type. Save this file for later.
 
 StereoLabel can be launched with `python3 scripts/label.py <path-to-dataset-folder>`. To label keypoints, click on the keypoints in the same order in each image. Make sure to label the points consistent with the keypoint configuration that you defined, so that the keypoints end up on the right heatmaps downstream.
 
-If you have multiple objects in the scene, it is important that you annotate one object at the time, sticking to the keypoint order, as the tool makes the assumption that one object's keypoints follow each other. The amount of keypoints you label should equal the amount of objects times the total number of keypoints.
+If you have multiple objects in the scene, it is important that you annotate one object at the time, sticking to the keypoint order, as the tool makes the assumption that one object's keypoints follow each other. The amount of keypoints you label should equal the amount of objects times the total number of keypoints per object.
 
 Once you have labeled an equal number of points on the left and right image, points will be backprojected, so that you can make sure that everything is correctly configured and that you didn't make a mistake. The points are saved at the same time to a file `keypoints.json` in each scene's directory.
 
 Here are some keyboard actions the tool supports:
-- `a` change the left frame with a random frame from the current sequence.
-- `b` change the right frame with a random frame from the current sequence.
-- `<tab>` go to next sequence.
+- Press `a` to change the left frame with a random frame from the current sequence.
+- Press `b` to change the right frame with a random frame from the current sequence.
+- Press `<tab>` to go to next sequence, after you labeled a sequence.
 
 Once the points have been saved and backprojected, you can freely press `a` and `b` to swap out the frames to different ones in the sequence. It will project the 3D points back into 2D onto the new frames. You can check that the keypoints project nicely to each frame. If not, you likely misclicked, the viewpoints are too close to each other, there could be an issue with your camera or hand-eye calibration or the camera poses are not accurate for some other reason.
 
@@ -81,10 +81,10 @@ Once done, you can package a model with `python scripts/package_model.py --model
 
 You can then run and check the metrics on a test set using `python scripts/eval_model.py <path-to-dataset> --model model.pt --keypoints <keypoint-config>`.
 
-### General tips
+## General tips
 
 Here are some general tips that might be of use:
-- Collect data at something like 4-5 fps. Generally, frames that are super close to each other aren't that useful and you don't really need every single frame.
+- Collect data at something like 4-5 fps. Generally, frames that are super close to each other aren't that useful and you don't really need every single frame. I.e. configure your camera node to only publish image messages at that rate.
 - Increase the publishing rate of your `robot_state_publisher` node to something like 100 or 200.
 - Move your robot slowly when collecting the data such that the time synchronization between your camera and robot is not that big of a problem.
 - Keep the scenes reasonable.
@@ -100,7 +100,7 @@ Currently, the package assumes that the data was collected using a stereo camera
 
 Moving the platform specific variables into a configuration file, would be a nice addition.
 
-The current implementation requires a stereo camera, but changing this to make use of a monocular camera would be possible. At least the following changes would have to be made:
+The current implementation requires a stereo camera, but changing this to make use of a monocular camera would be possible. The `depth` branch contains the modifications to the pipeline for predicting depth. At least the following changes would have to be made:
 - Update `encode_bag.py` to encode only one camera stream. In the stereo case, frames could be added after each other.
 - Update `label.py` to make use of the single sequence of images.
 - Update the dataloader to use the new data format.
