@@ -29,6 +29,7 @@ def read_args():
     parser.add_argument('--center-weight', default=1.0, help="Weight for center loss vs. heatmap loss.")
     parser.add_argument('--lr', default=4e-3, type=float, help="Learning rate.")
     parser.add_argument('--dropout', default=0.1, type=float)
+    parser.add_argument('--resume', default=None)
     return parser.parse_args()
 
 def _to_image(image):
@@ -151,12 +152,19 @@ def main():
     with open(flags.keypoints) as f:
         keypoint_config = json.load(f)
     data_module = DataModule(flags, keypoint_config)
-    module = KeypointModule(keypoint_config,
-            lr=flags.lr,
-            center_weight=flags.center_weight,
-            features=flags.features,
-            dropout=flags.dropout,
-            weight_decay=flags.weight_decay)
+    if flags.resume is None:
+        module = KeypointModule(keypoint_config,
+                lr=flags.lr,
+                center_weight=flags.center_weight,
+                features=flags.features,
+                dropout=flags.dropout,
+                weight_decay=flags.weight_decay)
+    else:
+        module = KeypointModule.load_from_checkpoint(flags.resume,
+                lr=flags.lr,
+                center_weight=flags.center_weight,
+                dropout=flags.dropout,
+                weight_decay=flags.weight_decay)
 
     from pytorch_lightning.callbacks import ModelCheckpoint
     checkpoint_cb = ModelCheckpoint(monitor='val_loss',
