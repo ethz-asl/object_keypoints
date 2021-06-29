@@ -21,6 +21,8 @@ def read_args():
     parser.add_argument('--out', '-o', required=True, help="Where to write output files.")
     parser.add_argument('--skip', default=0, type=int, help="Skip the first n bags.")
     parser.add_argument('--until', default=None, type=int, help="Encode until the nth bag.")
+    parser.add_argument('--calibration', required=True, type=str)
+    parser.add_argument('--base-frame', type=str, default='panda_link0')
     return parser.parse_args()
 
 def left_to_right_transform():
@@ -130,7 +132,7 @@ class Runner:
         for item in left:
             try:
                 # Reminder: ^{B}T^{A} = T_BA = lookup_transform(source_frame=A, target_frame=B)
-                T_BL = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='panda_link0',
+                T_BL = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame=self.flags.base_frame,
                         source_frame='zedm_left_optical_frame', time=item['message'].header.stamp))
                 item['camera_pose'] = T_BL
                 item['i'] = i # Override index as some frames might have been skipped.
@@ -143,7 +145,7 @@ class Runner:
         i = 0
         for item in right:
             try:
-                T_BR = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame='panda_link0',
+                T_BR = ros_utils.message_to_transform(tf_tree.lookup_transform_core(target_frame=self.flags.base_frame,
                         source_frame='zedm_right_optical_frame', time=item['message'].header.stamp))
                 item['camera_pose'] = T_BR
                 item['i'] = i
@@ -162,27 +164,9 @@ class Runner:
         _add_poses(out_file, 'left', left_poses)
         _add_poses(out_file, 'right', right_poses)
 
-    def _write_calibration(self, h5_file, bag):
-        left_calibration = None
-        right_calibration = None
-        for topic, message, t in bag.read_messages(topics="/zedm/zed_node/left_raw/camera_info"):
-            left_calibration = message
-        for topic, message, t in bag.read_messages(topics="/zedm/zed_node/right_raw/camera_info"):
-            right_calibration = message
-        if left_calibration is None and right_calibration is None:
-            return
-
-        group = h5_file.create_group('calibration')
-        left = group.create_group('left')
-        right = group.create_group('right')
-        left_D = left.create_dataset('D', 5, dtype=np.float64)
-        left_K = left.create_dataset('K', 9, dtype=np.float64)
-        right_D = right.create_dataset('D', 5, dtype=np.float64)
-        right_K = right.create_dataset('K', 9, dtype=np.float64)
-        left_D[:] = left_calibration.D
-        left_K[:] = left_calibration.K
-        right_D[:] = right_calibration.D
-        right_K[:] = right_calibration.K
+    def _write_calibration(self, out_folder):
+        destination = os.path.join(out_folder, 'calibration.yaml')
+        shutil.copy(self.flags.calibration, destination)
 
     def _encode_video(self, bag_name, left_data, right_data):
         out_folder = os.path.join(self.flags.out, bag_name.split(os.path.extsep)[0])
@@ -209,7 +193,7 @@ class Runner:
 
                 with h5py.File(filename, 'w') as h5_file:
                     tf_tree = self._read_poses(out_folder, bag)
-                    self._write_calibration(h5_file, bag)
+                    self._write_calibration(out_folder)
                     left_frames, right_frames = self._gather_images(bag)
                     left_poses, right_poses = self._gather_poses(tf_tree, left_frames, right_frames)
                     self._write_poses(h5_file, left_poses, right_poses)
