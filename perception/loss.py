@@ -3,7 +3,7 @@ from torch.nn.modules.loss import _Loss
 from torch.nn import functional as F
 
 class FocalLoss(_Loss):
-    def __init__(self, alpha=2.0, beta=4.0):
+    def __init__(self, alpha=2.0, beta=2.0):
         super().__init__()
         self.alpha = alpha
         self.beta = beta
