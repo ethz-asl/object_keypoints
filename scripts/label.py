@@ -96,7 +96,7 @@ class LabelingApp:
         self.done = False
 
     def _create_views(self):
-        self.window = hud.AppWindow("StereoLabeler", 1920, 540)
+        self.window = hud.AppWindow("StereoLabel", 1920, 540)
         self.left_image_pane = hud.ImagePane()
         self.right_image_pane = hud.ImagePane()
         self.left_points = hud.PointLayer([])
