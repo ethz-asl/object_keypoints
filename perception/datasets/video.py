@@ -17,7 +17,7 @@ import albumentations as A
 heatmap_size = 64
 center_radius = heatmap_size / 16.0
 kernel_size = int(heatmap_size / 8.0)
-default_length_scale = heatmap_size / 64.0
+default_length_scale = heatmap_size / 32.0
 
 @jit(nopython=True)
 def _gaussian_kernel(x, y, length_scale):
