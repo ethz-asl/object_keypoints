@@ -141,11 +141,16 @@ class PointVisualizer:
     def run(self):
         random.seed(self.flags.seed)
         rate = Rate(self.flags.rate)
-        directories = os.listdir(self.flags.base_dir)
-        random.shuffle(directories)
+        if os.path.isfile(os.path.join(self.flags.base_dir, 'keypoints.json')):
+            directories = [os.path.basename(self.flags.base_dir)]
+            base_dir = os.path.dirname(self.flags.base_dir)
+        else:
+            directories = os.listdir(self.flags.base_dir)
+            base_dir = self.flags.base_dir
+            random.shuffle(directories)
         for directory in directories:
             try:
-                view_model = ViewModel(self.flags, os.path.join(self.flags.base_dir, directory))
+                view_model = ViewModel(self.flags, os.path.join(base_dir, directory))
                 print(f"Sequence {directory}")
                 for left_frame, left_points, right_frame, right_points in view_model:
                     print(f"Current frame {view_model.current_frame}, num frames: {view_model.num_frames}" + 5 * " ", end="\r")
