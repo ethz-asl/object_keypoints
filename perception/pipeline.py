@@ -75,7 +75,7 @@ class KeypointExtractionComponent:
             weights_c = torch.nn.functional.conv2d(probabilities, self.kernel, bias=None, stride=1,
                     padding=2)
             surpressed = nms(weights_c)
-            indices = self.image_indices[surpressed[0, 0] > 1.0]
+            indices = self.image_indices[surpressed[0, 0] > 0.5]
             points, confidence = self._compute_points(indices, probabilities[0, 0])
 
             points = [x[::-1] for x in points]

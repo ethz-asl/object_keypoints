@@ -3,7 +3,7 @@ from torch.nn.modules.loss import _Loss
 from torch.nn import functional as F
 
 class FocalLoss(_Loss):
-    def __init__(self, alpha=2.0, beta=2.0):
+    def __init__(self, alpha=1.0, beta=1.0):
         super().__init__()
         self.alpha = alpha
         self.beta = beta
@@ -12,7 +12,7 @@ class FocalLoss(_Loss):
         N = target.shape[0]
         bce = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
         p = torch.sigmoid(pred)
-        mask = (target > 0.95).float()
+        mask = (target > 0.99).float()
         return (
             mask * torch.pow(1.0 - p, self.alpha) +
             (1.0 - mask) * torch.pow(1.0 - target, self.beta) * torch.pow(p, self.alpha)
@@ -43,7 +43,8 @@ class KeypointLoss(_Loss):
         N = float(gt_heatmaps.shape[0])
         center_losses = []
         for p_hm, p_center in zip(p_heatmaps, p_centers):
-            loss = self.focal_loss(p_hm, gt_heatmaps).sum(dim=[1,2,3]).mean()
+            loss = F.binary_cross_entropy_with_logits(p_hm, gt_heatmaps, reduction='none').sum(dim=[1,2,3]).mean()
+            # loss = self.focal_loss(p_hm, gt_heatmaps).sum(dim=[1,2,3]).mean()
             heatmap_loss += loss
             heatmap_losses.append(loss)
 

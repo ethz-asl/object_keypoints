@@ -88,8 +88,8 @@ class StereoVideoDataset(IterableDataset):
         augmentations = []
         if augment:
             augmentations += [A.RandomResizedCrop(height=self.image_size[0], width=self.image_size[1], scale=(0.7, 1.0), ratio=(1.0, 1.0)),
-                    A.RandomBrightnessContrast(p=1.0),
-                    A.RandomGamma(p=1.0),
+                    A.RandomBrightnessContrast(p=0.5),
+                    A.RandomGamma(p=0.5),
                     A.Cutout(max_h_size=25, max_w_size=25, p=0.5),
                     A.HorizontalFlip(p=0.5),
                     A.VerticalFlip(p=0.5)]
