@@ -134,7 +134,6 @@ class DataModule(pl.LightningDataModule):
             train_datasets = []
             for camera in [0, 1]:
                 train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=True, augment_color=True, camera=camera)
-                train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=False, augment_color=True, camera=camera)
             val_datasets = (_build_datasets(self.val_sequences, camera=0, keypoint_config=self.keypoint_config, augment=False, include_pose=True) +
                     _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, camera=1, include_pose=True))
             train = torch.utils.data.ChainDataset(train_datasets)
