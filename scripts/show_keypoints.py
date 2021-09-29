@@ -36,8 +36,8 @@ class ViewModel:
         self.world_points = [np.array(p) for p in contents['3d_points']]
 
     def _load_video(self, base_dir):
-        self.left_video = video_io.vreader(os.path.join(base_dir, 'left.mp4'))
-        self.right_video = video_io.vreader(os.path.join(base_dir, 'right.mp4'))
+        self.left_video = video_io.vreader(os.path.join(base_dir, 'left_preview.mp4'))
+        self.right_video = video_io.vreader(os.path.join(base_dir, 'right_preview.mp4'))
 
     def _load_metadata(self, base_dir):
         self.hdf = h5py.File(os.path.join(base_dir, 'data.hdf5'), 'r')
@@ -107,6 +107,7 @@ class PointVisualizer:
     def __init__(self, flags):
         self.flags = flags
         self.paused = False
+        self.next = False
         self.done = False
         self.window = hud.AppWindow("Keypoints", 1280, 360)
         self._create_views()
@@ -135,6 +136,8 @@ class PointVisualizer:
             self.done = True
         elif event.key == ' ':
             self.paused = not self.paused
+        elif event.key == '\x00':
+            self.next = True
 
     def run(self):
         rate = Rate(self.flags.rate)
@@ -155,6 +158,9 @@ class PointVisualizer:
                     while self.paused:
                         self.window.poll_events()
                         rate.sleep()
+                    if self.next:
+                        self.next = False
+                        break
                     rate.sleep()
             finally:
                 view_model.close()
