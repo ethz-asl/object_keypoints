@@ -1,12 +1,18 @@
 <?xml version="1.0" ?>
 <launch>
   <node name="object_keypoints_ros" pkg="object_keypoints_ros" type="run_pipeline.py" output="screen">
-    <param name="left_image_topic" value="/zedm/zed_node/left_raw/image_raw_color" />
-    <param name="right_image_topic" value="/zedm/zed_node/right_raw/image_raw_color" />
-    <param name="left_camera_frame" value="zedm_left_camera_optical_frame" />
-    <param name="load_model" value="$(find object_keypoints_ros)/models/modelv2.pt" />
+    <param name="left_image_topic" value="/camera/color/image_raw" />
+    <param name="right_image_topic" value="/camera/color/image_raw" />
+    <param name="left_camera_frame" value="camera_link" />
+    <param name="load_model" value="$(find object_keypoints_ros)/models/cups_depth.pt" />
     <param name="calibration" value="$(find object_keypoints_ros)/config/calibration.yaml" />
-    <param name="keypoints" value="$(find object_keypoints_ros)/config/keypoints.json" />
+    <param name="keypoints" value="$(find object_keypoints_ros)/config/cups.json" />
     <param name="pnp" value="false" type="bool" />
+    <param name="gpu" value="false" type="bool" />
   </node>
+
+  <!-- Open Rviz -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find object_keypoints_ros)/config/cups.rviz" output="screen" launch-prefix="xterm -e"/>
+
+
 </launch>

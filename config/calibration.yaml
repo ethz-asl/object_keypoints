@@ -16,7 +16,7 @@ cam0:
   resolution:
   - 1280
   - 720
-  rostopic: /zedm/zed_node/left_raw/image_raw_color
+  rostopic: /camera/color/image_raw
 cam1:
   T_cn_cnm1:
   - - 0.999991121255849
@@ -52,4 +52,4 @@ cam1:
   resolution:
   - 1280
   - 720
-  rostopic: /zedm/zed_node/right_raw/image_raw_color
+  rostopic: /camera/color/image_raw
