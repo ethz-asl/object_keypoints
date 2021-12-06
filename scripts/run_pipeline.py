@@ -50,15 +50,14 @@ class ObjectKeypointPipeline:
         self.right_image_ts = None
         self.bridge = CvBridge()
         self.use_gpu = rospy.get_param("object_keypoints_ros/gpu", True)
-        # self.input_size = (360, 640)
-        # self.prediction_size = (90, 160)
         self.input_size = (511, 511)
         self.IMAGE_SIZE = (511, 511)
-        self.prediction_size = (64, 64)
+        self.prediction_size = StereoVideoDataset.prediction_size
 
         self.keypoint_config_path = rospy.get_param('object_keypoints_ros/keypoints')
         with open(self.keypoint_config_path, 'rt') as f:
             self.keypoint_config = json.load(f)
+
         model = rospy.get_param('object_keypoints_ros/load_model', "/home/ken/Hack/catkin_ws/src/object_keypoints/model/modelv2.pt")
        
         if rospy.get_param('object_keypoints_ros/pnp', False):
@@ -68,7 +67,6 @@ class ObjectKeypointPipeline:
             #                 self.prediction_size,self._read_keypoints(), self.keypoint_config)
             self.pipeline = pipeline.LearnedKeypointTrackingPipeline(model, self.use_gpu,
                 self.prediction_size, self.keypoint_config)
-
 
         self.rgb_mean = torch.tensor([0.5, 0.5, 0.5], requires_grad=False, dtype=torch.float32)[:, None, None]
         self.rgb_std = torch.tensor([0.25, 0.25, 0.25], requires_grad=False, dtype=torch.float32)[:, None, None]
@@ -109,7 +107,7 @@ class ObjectKeypointPipeline:
         self.Dp = params['Dp']
         self.T_RL = params['T_RL']
         self.image_size = params['image_size']
-
+      
         left_camera = camera_utils.FisheyeCamera(params['K'], params['D'], params['image_size'])
         right_camera = camera_utils.FisheyeCamera(params['Kp'], params['Dp'], params['image_size'])
         self.left_camera = left_camera
@@ -160,7 +158,6 @@ class ObjectKeypointPipeline:
     def _publish_pose(self, pose_msg, time):
         pose_msg = ros_utils.transform_to_pose(T, self.left_camera_frame, rospy.Time(0))
         self.pose_pub.publish(pose_msg)
-
         self._publish_bounding_box(pose_msg)
 
     def _publish_heatmaps(self, left, right, left_keypoints, right_keypoints):
@@ -195,7 +192,6 @@ class ObjectKeypointPipeline:
         image_msg = self.bridge.cv2_to_imgmsg(image[:, :, :3], encoding='passthrough')
         self.result_img_pub.publish(image_msg)
 
-
     def _to_heatmap(self, target):
         target = np.clip(target, 0.0, 1.0)
         target = target.sum(axis=0)
@@ -208,20 +204,24 @@ class ObjectKeypointPipeline:
 
     def step(self):
         I = torch.eye(4)[None]
-        if self.left_image is not None and self.right_image is not None:
+        if self.left_image is not None:
             left_image = self._preprocess_image(self.left_image)
-            right_image = self._preprocess_image(self.right_image)
-            # out = self.pipeline(left_image, right_image)
-            #print("image size: ", left_image.size())
             objects, heatmap = self.pipeline(left_image)
             self.left_image = None
-            self.right_image = None
+ 
             heatmap_left = self._to_heatmap(heatmap[0].numpy())
-            #print("heatmap left", heatmap_left.shape)
+  
             left_image = left_image.cpu().numpy()[0]
-            #print("left image", left_image.shape)
+
             left_rgb = self._to_image(left_image)
             image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
+            points_left = []
+            for obj in objects:
+                p_left = np.concatenate([p + 1.0 for p in obj['keypoints_left'] if p.size != 0], axis=0)
+                rospy.loginfo(p_left)
+                points_left.append(p_left)
+                #points_right.append(p_right)
+
             # self._publish_keypoints(out['keypoints'][0], self.left_image_ts)
             # self._publish_pose(out['pose'][0], self.left_image_ts)
             # self._publish_heatmaps(out['heatmap_left'][0], out['heatmap_right'][0], 

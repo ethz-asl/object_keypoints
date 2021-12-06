@@ -1,5 +1,8 @@
 <?xml version="1.0" ?>
 <launch>
+  <arg name="load_cam" default="false"/>
+  <arg name="load_bag_filepath" default="true"/>
+
   <node name="object_keypoints_ros" pkg="object_keypoints_ros" type="run_pipeline.py" output="screen">
     <param name="left_image_topic" value="/camera/color/image_raw" />
     <param name="right_image_topic" value="/camera/color/image_raw" />
@@ -8,8 +11,14 @@
     <param name="calibration" value="$(find object_keypoints_ros)/config/calibration.yaml" />
     <param name="keypoints" value="$(find object_keypoints_ros)/config/cups.json" />
     <param name="pnp" value="false" type="bool" />
-    <param name="gpu" value="false" type="bool" />
+    <param name="gpu" value="true" type="bool" />
   </node>
+
+  <group if="$(arg load_cam)">
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch" />
+  </group>
+  
+  <node pkg="rosbag" type="play" name="rosbag_play_recoreded" args=" -l /home/boyang/2021-11-24-14-37-43.bag" if="$(arg load_bag_filepath)" />
 
   <!-- Open Rviz -->
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find object_keypoints_ros)/config/cups.rviz" output="screen" launch-prefix="xterm -e"/>
