@@ -42,7 +42,7 @@ Press enter to start recording a new sequence. Recording will start after a 5 se
 
 Since rosbag is not a very convenient or efficient format for our purposes, we encode the data into a format that is easier to work with and uses up less disk space. This is done using the script `scripts/encode_bag.py`.
 
-Run it with `python3 scripts/encode_bags.py --bags <path-to-bag-output-folder> --out <path-to-dataset-output> --calibration <path-to-kalibr-calibration.yaml>`.
+Run it with `python3 scripts/encode_bags.py --bags <path-to-bag-output-folder> --out <path-to-dataset-output>`.
 
 ### Labeling data
 
@@ -54,7 +54,7 @@ First decide how many keypoints you will use for your object class and what thei
 ```
 What this means, is that there will first be a keypoint of the first type and then three keypoints of the next type. Save this file for later.
 
-StereoLabel can be launched with `python3 scripts/label.py <path-to-dataset-folder>`. To label keypoints, click on the keypoints in the same order in each image. Make sure to label the points consistent with the keypoint configuration that you defined, so that the keypoints end up on the right heatmaps downstream.
+StereoLabel can be launched with `python3 scripts/label.py <path-to-dataset-folder> --calibration <path-to-kalibr-calibration.yaml>`. To label keypoints, click on the keypoints in the same order in each image. Make sure to label the points consistent with the keypoint configuration that you defined, so that the keypoints end up on the right heatmaps downstream.
 
 If you have multiple objects in the scene, it is important that you annotate one object at the time, sticking to the keypoint order, as the tool makes the assumption that one object's keypoints follow each other. The amount of keypoints you label should equal the amount of objects times the total number of keypoints per object.
 

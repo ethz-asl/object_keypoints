@@ -6,12 +6,11 @@ import hud
 import h5py
 import numpy as np
 import cv2
-import constants
 import yaml
 import random
 from skvideo import io as video_io
+from perception.constants import *
 from perception.utils import camera_utils, Rate, linalg
-hud.set_data_directory(os.path.dirname(hud.__file__))
 
 def read_args():
     parser = argparse.ArgumentParser()
@@ -21,7 +20,6 @@ def read_args():
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
-KEYPOINT_FILENAME = 'keypoints.json'
 
 class ViewModel:
     def __init__(self, flags, directory):
@@ -72,8 +70,7 @@ class ViewModel:
 
             frame_points.append(
                     hud.utils.to_normalized_device_coordinates(
-                        hud.Point(p_c[0], p_c[1]),
-                        constants.IMAGE_RECT))
+                        hud.Point(p_c[0], p_c[1]), IMAGE_RECT))
 
 
         frame = next(self.video)
@@ -127,7 +124,7 @@ class PointVisualizer:
                 for frame, points in view_model:
                     print(f"Current frame {view_model.current_frame}, num frames: {view_model.num_frames}" + 5 * " ", end="\r")
                     self.image_pane.set_texture(frame)
-                    self.image_points.set_points(points, constants.KEYPOINT_COLOR[None].repeat(len(points), 0))
+                    self.image_points.set_points(points, KEYPOINT_COLOR[None].repeat(len(points), 0))
                     if not self.window.update() or self.done:
                         return
                     self.window.poll_events()
