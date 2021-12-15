@@ -1,11 +1,11 @@
 
 # Object Keypoint Tracking ROS Wrapper
 
-Performs stereo keypoint tracking using the [Object Keypoints](https://github.com/ethz-asl/object_keypoints) package.
+Performs stereo & monocular keypoint tracking using the [Object Keypoints](https://github.com/ethz-asl/object_keypoints) package.
 
 Dependencies:
 - [Object Keypoints](https://github.com/ethz-asl/object_keypoints)
-    -  Use the `monocular` branch 
+    -  Recommand to use the `monocular` branch 
 
 The example launch file at `launch/keypoints.launch` shows an example configuration.
 
