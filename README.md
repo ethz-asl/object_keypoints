@@ -38,8 +38,6 @@ Run it with `python3 scripts/collect_bags.py --out <path-to-bag-output-folder>`.
 
 Press enter to start recording a new sequence. Recording will start after a 5 second grace period, after which the topics will be recorded for 30 seconds. During the 30 seconds, slowly guide the robot arm to different viewpoints observing your target objects.
 
-TODO: remove hardcoded topic names from `collect_bags.py`.
-
 ### Encoding data
 
 Since rosbag is not a very convenient or efficient format for our purposes, we encode the data into a format that is easier to work with and uses up less disk space. This is done using the script `scripts/encode_bag.py`.
@@ -95,16 +93,10 @@ Here are some general tips that might be of use:
 
 ## Using your own sensor and robot
 
-Currently, the package assumes that the data was collected using a stereo camera, specifically a StereoLabs ZED Mini and makes some assumptions about the names of the coordinate frames. When running on with a different setup, check the following things:
-- Update the `collect_bags.py` script to record the appropriate topics.
-- Update the `encode_bag.py` script to use the correct coordinate frame names.
-- Use the `--base-frame` parameter of the `encode_bag.py` script to set the name of the base frame. This should be a coordinate frame which is static relative to your objects when recording data.
+The `collect_bags.py` has some hard coded topic names. Update those to match whatever you are using.
 
-Moving the platform specific variables into a configuration file, would be a nice addition.
-
-The current implementation requires a stereo camera, but changing this to make use of a monocular camera would be possible. The `depth` branch contains the modifications to the pipeline for predicting depth. At least the following changes would have to be made:
-- Update `encode_bag.py` to encode only one camera stream. In the stereo case, frames could be added after each other.
-- Update `label.py` to make use of the single sequence of images.
+TODO:
+- Remove hardcoded topics from `collect_bags.py`
 - Update the dataloader to use the new data format.
 - Update the evaluation script and visualizer to only use one stream of images.
 
