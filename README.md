@@ -5,6 +5,7 @@ Performs stereo keypoint tracking using the [Object Keypoints](https://github.co
 
 Dependencies:
 - [Object Keypoints](https://github.com/ethz-asl/object_keypoints)
+    -  Use the `monocular` branch 
 
 The example launch file at `launch/keypoints.launch` shows an example configuration.
 
@@ -16,4 +17,4 @@ The arguments to the `run_pipeline.py` node are:
 - `load_model` path to the trained model to use for inference.
 - `calibration` path to a [Kalibr](https://github.com/ethz-asl/kalibr) yaml calibration file containing camera intrinsics and extrinsics.
 
-
+An example could be: `roslaunch object_keypoints_ros keypoints.launch load_vistools:=<whether-want-vis-result>, load_cam:=<whether-want-launch-cam>, load_bag:=<whether-want-to-play-rosbag> `

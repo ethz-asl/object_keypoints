@@ -5,7 +5,7 @@ import sys
 
 from numpy.core.fromnumeric import size
 sys.path.insert(0, '/home/boyang/catkin_ws/devel/lib/python3/dist-packages')
-sys.path.insert(0, '/home/boyang/thesis/perception/object_keypoints')
+sys.path.insert(0, '/home/boyang/thesis/perception/object_keypoint_mono')
 import json
 
 import rospy
@@ -63,24 +63,22 @@ class ObjectKeypointPipeline:
         if rospy.get_param('object_keypoints_ros/pnp', False):
             self.pipeline = pipeline.PnPKeypointPipeline(model, self._read_keypoints(), torch.cuda.is_available())
         else:
-            # self.pipeline = pipeline.LearnedKeypointTrackingPipeline(model, torch.cuda.is_available(),
-            #                 self.prediction_size,self._read_keypoints(), self.keypoint_config)
+            _3d_point = []
             self.pipeline = pipeline.LearnedKeypointTrackingPipeline(model, self.use_gpu,
-                self.prediction_size, self.keypoint_config)
+                self.prediction_size, _3d_point, self.keypoint_config)
 
         self.rgb_mean = torch.tensor([0.5, 0.5, 0.5], requires_grad=False, dtype=torch.float32)[:, None, None]
         self.rgb_std = torch.tensor([0.25, 0.25, 0.25], requires_grad=False, dtype=torch.float32)[:, None, None]
         
         self._read_calibration()
         scaling_factor = np.array(self.image_size) / np.array(self.prediction_size)
-        #self.pipeline.reset(self.K, self.Kp, self.D, self.Dp, self.T_RL, scaling_factor)
         self.pipeline.reset(self.stereo_camera)
 
         self._compute_bbox_dimensions()
 
         # TF
-        self.tf_buffer = tf2_ros.Buffer()
-        self.listener = tf2_ros.TransformListener(self.tf_buffer)
+        # self.tf_buffer = tf2_ros.Buffer()
+        # self.listener = tf2_ros.TransformListener(self.tf_buffer)
 
         # Publishers
         self.center_point_publisher = rospy.Publisher("object_keypoints_ros/center", PointStamped, queue_size=1)
@@ -114,9 +112,7 @@ class ObjectKeypointPipeline:
         self.right_camera = right_camera
 
         self.stereo_camera = camera_utils.StereoCamera(self.left_camera, self.right_camera, params['T_RL'])
-
         #self.stereo_camera_small = camera_utils.StereoCamera(left_camera, right_camera, params['T_RL'])
-
 
     def _read_keypoints(self):  # not included in prediction process
         path = rospy.get_param('object_keypoints_ros/keypoints')
@@ -188,7 +184,6 @@ class ObjectKeypointPipeline:
             self.bbox_pub.publish(msg)
 
     def _publish_result(self,image):
-        #print("result: ", image.shape)
         image_msg = self.bridge.cv2_to_imgmsg(image[:, :, :3], encoding='passthrough')
         self.result_img_pub.publish(image_msg)
 
@@ -220,15 +215,7 @@ class ObjectKeypointPipeline:
                 p_left = np.concatenate([p + 1.0 for p in obj['keypoints_left'] if p.size != 0], axis=0)
                 rospy.loginfo(p_left)
                 points_left.append(p_left)
-                #points_right.append(p_right)
-
-            # self._publish_keypoints(out['keypoints'][0], self.left_image_ts)
-            # self._publish_pose(out['pose'][0], self.left_image_ts)
-            # self._publish_heatmaps(out['heatmap_left'][0], out['heatmap_right'][0], 
-            #                      out['keypoints_left'][0], out['keypoints_right'][0])
             self._publish_result(image_left)
-            #print("out ", objects)
-            # self._publish_keypoints(objects[0]['keypoints_left'], self.left_image_ts)
             
 if __name__ == "__main__":
     with torch.no_grad():

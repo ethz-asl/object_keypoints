@@ -1,7 +1,8 @@
 <?xml version="1.0" ?>
 <launch>
   <arg name="load_cam" default="false"/>
-  <arg name="load_bag_filepath" default="true"/>
+  <arg name="load_bag" default="true"/>
+  <arg name="load_vistools" default="false"/>
 
   <node name="object_keypoints_ros" pkg="object_keypoints_ros" type="run_pipeline.py" output="screen">
     <param name="left_image_topic" value="/camera/color/image_raw" />
@@ -18,10 +19,10 @@
     <include file="$(find realsense2_camera)/launch/rs_camera.launch" />
   </group>
   
-  <node pkg="rosbag" type="play" name="rosbag_play_recoreded" args=" -l /home/boyang/2021-11-24-14-37-43.bag" if="$(arg load_bag_filepath)" />
+  <!-- <node pkg="rosbag" type="play" name="rosbag_play_recoreded" args=" /home/boyang/data/cups/000.bag" if="$(arg load_bag)" /> -->
 
-  <!-- Open Rviz -->
-  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find object_keypoints_ros)/config/cups.rviz" output="screen" launch-prefix="xterm -e"/>
-
+  <group if="$(arg load_vistools)">
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find object_keypoints_ros)/config/cups.rviz" output="screen"/>
+  </group>
 
 </launch>
