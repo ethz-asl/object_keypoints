@@ -12,4 +12,3 @@ IMAGE_WIDTH = 1280
 IMAGE_RECT = hud.Rect(0, 0, IMAGE_WIDTH, IMAGE_HEIGHT)
 image_size = (int(IMAGE_RECT.width), int(IMAGE_RECT.height))
 KEYPOINT_COLOR = np.array([1.0, 0.0, 0.0, 1.0])
-
