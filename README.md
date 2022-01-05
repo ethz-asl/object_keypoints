@@ -75,7 +75,9 @@ Once all your sequences have been labeled, you can check that the labels are cor
 
 ### Learning a model
 
-First split your dataset into a training and validation set. You can train a model with `python --train <path-to-training-dataset> --val <path-to-validation-dataset>`.
+First, download the weights for the CornerNet backbone model. This can be done from the [CornerNet repository](https://github.com/princeton-vl/CornerNet-Lite). We use the CornerNet-Squeeze model. Place the file at `models/corner_net.pkl`.
+
+You can train a model with `python scripts/train.py --train <path-to-training-dataset> --val <path-to-validation-dataset>`. Where `--train` points to the directory containing your training scenes. `--val` points to the directory containing your validation scenes.
 
 Once done, you can package a model with `python scripts/package_model.py --model lightning_logs/version_x/checkpoints/<checkpoint>.ckpt --out model.pt`
 
