@@ -14,8 +14,6 @@ from perception.utils import linalg
 from constants import *
 from perception.utils import camera_utils
 
-hud.set_data_directory(os.path.dirname(hud.__file__))
-
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")

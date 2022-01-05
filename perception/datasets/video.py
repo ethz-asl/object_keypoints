@@ -55,9 +55,7 @@ def _set_keypoints(heatmap, indices, length_scale=default_length_scale):
 RGB_MEAN = np.array([0.40789654, 0.44719302, 0.47026115], dtype=np.float32)
 RGB_STD = np.array([0.28863828, 0.27408164, 0.27809835], dtype=np.float32)
 
-class StereoVideoDataset(IterableDataset):
-    LEFT = 0
-    RIGHT = 1
+class SceneDataset(IterableDataset):
     kernel_size = 50
     kernel_center = 25
     kernel = _compute_kernel(kernel_size, kernel_center)
@@ -70,11 +68,9 @@ class StereoVideoDataset(IterableDataset):
     # Offset x, y start point of cropped image.
     image_offset = np.array([(height_resized / height * width - 511.0) / 2.0, 0.0])
 
-    def __init__(self, base_dir, keypoint_config, augment=False, augment_color=False, camera=None,
-            include_pose=False):
+    def __init__(self, base_dir, keypoint_config, augment=False, augment_color=False, include_pose=False):
         self.base_dir = os.path.expanduser(base_dir)
         self.metadata_path = os.path.join(self.base_dir, "data.hdf5")
-        self.camera = camera
         self.augment = augment
         self.keypoint_config = [1] + keypoint_config['keypoint_config']
         self._init_points()
@@ -109,12 +105,7 @@ class StereoVideoDataset(IterableDataset):
         self.std = RGB_STD
 
         with h5py.File(self.metadata_path, 'r') as f:
-            if self.camera == self.LEFT:
-                self.poses = f['left/camera_transform'][:]
-            elif self.camera == self.RIGHT:
-                self.poses = f['right/camera_transform'][:]
-            else:
-                raise ValueError("Camera needs to be 0 or 1.")
+            self.poses = f['camera_transform'][:]
 
     def __len__(self):
         return self.poses.shape[0]
@@ -122,13 +113,8 @@ class StereoVideoDataset(IterableDataset):
     def _load_calibration(self):
         calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
         calibration = camera_utils.load_calibration_params(calibration_file)
-
-        if self.camera == self.LEFT:
-            self.K = calibration['K']
-            self.D = calibration['D']
-        elif self.camera == self.RIGHT:
-            self.K = calibration['Kp']
-            self.D = calibration['Dp']
+        self.K = calibration['K']
+        self.D = calibration['D']
 
     def _init_points(self):
         filepath = os.path.join(self.base_dir, 'keypoints.json')
@@ -194,7 +180,7 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
             target[y_start:y_end, x_start:x_end] += cls.kernel[y_range_start:y_range_end, x_range_start:x_range_end]
 
     def __iter__(self):
-        video_file = 'left.mp4' if self.camera == self.LEFT else 'right.mp4'
+        video_file = 'frames.mp4'
         video_file = os.path.join(self.base_dir, video_file)
         video = video_io.vreader(video_file)
         try:
