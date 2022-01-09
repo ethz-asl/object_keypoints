@@ -7,7 +7,7 @@
   <node name="object_keypoints_ros" pkg="object_keypoints_ros" type="run_pipeline.py" output="screen">
     <param name="left_image_topic" value="/camera/color/image_raw" />
     <param name="right_image_topic" value="/camera/color/image_raw" />
-    <param name="left_camera_frame" value="camera_link" />
+    <param name="left_camera_frame" value="camera_color_optical_frame" />
     <param name="load_model" value="$(find object_keypoints_ros)/models/cups_depth.pt" />
     <param name="calibration" value="$(find object_keypoints_ros)/config/calibration.yaml" />
     <param name="keypoints" value="$(find object_keypoints_ros)/config/cups.json" />
@@ -15,11 +15,14 @@
     <param name="gpu" value="true" type="bool" />
   </node>
 
+  <!-- add kp markers topic "kp_3d_marker" for rviz -->>
+  <node name="kp_3d_makers_vis_node" pkg="object_keypoints_ros" type="vis_kp.py" output="screen"/>
+
   <group if="$(arg load_cam)">
     <include file="$(find realsense2_camera)/launch/rs_camera.launch" />
   </group>
   
-  <!-- <node pkg="rosbag" type="play" name="rosbag_play_recoreded" args=" /home/boyang/data/cups/000.bag" if="$(arg load_bag)" /> -->
+  <node pkg="rosbag" type="play" name="rosbag_play_recoreded" args=" -r 0.1 /home/boyang/data/cups/000.bag" if="$(arg load_bag)" />
 
   <group if="$(arg load_vistools)">
     <node name="rviz" pkg="rviz" type="rviz" args="-d $(find object_keypoints_ros)/config/cups.rviz" output="screen"/>

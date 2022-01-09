@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # To find catkin python3 build of tf2_py
+from pickle import NONE
 import sys
 
 from numpy.core.fromnumeric import size
@@ -16,7 +17,7 @@ import cv2
 import tf2_ros
 from cv_bridge import CvBridge
 from scipy.spatial.transform import Rotation
-from geometry_msgs.msg import PointStamped, PoseStamped
+from geometry_msgs.msg import PointStamped, PoseStamped, PoseArray, Pose
 from perception.utils import ros as ros_utils
 from sensor_msgs.msg import Image
 from perception.datasets.video import StereoVideoDataset
@@ -26,6 +27,8 @@ from matplotlib import cm
 from vision_msgs.msg import BoundingBox3D
 #from . import utils
 import utils
+from visualization_msgs.msg import Marker
+from visualization_msgs.msg import MarkerArray
 
 def _to_msg(keypoint, time, frame):
     msg = PointStamped()
@@ -42,8 +45,8 @@ class ObjectKeypointPipeline:
         left_image_topic = rospy.get_param("object_keypoints_ros/left_image_topic", "/zedm/zed_node/left_raw/image_raw_color")
         right_image_topic = rospy.get_param("object_keypoints_ros/right_image_topic", "/zedm/zed_node/right_raw/image_raw_color")
         self.left_camera_frame = rospy.get_param('object_keypoints_ros/left_camera_frame')
-        self.left_sub = rospy.Subscriber(left_image_topic, Image, callback=self._right_image_callback, queue_size=1)
-        self.right_sub = rospy.Subscriber(right_image_topic, Image, callback=self._left_image_callback, queue_size=1)
+        self.left_sub = rospy.Subscriber(left_image_topic, Image, callback=self._left_image_callback, queue_size=1)
+        # self.right_sub = rospy.Subscriber(right_image_topic, Image, callback=self._right_image_callback, queue_size=1)
         self.left_image = None
         self.left_image_ts = None
         self.right_image = None
@@ -79,13 +82,17 @@ class ObjectKeypointPipeline:
         # TF
         # self.tf_buffer = tf2_ros.Buffer()
         # self.listener = tf2_ros.TransformListener(self.tf_buffer)
-
+        
+        # kp marker
+        self.kpArray = MarkerArray()
+        self.kp_publisher = rospy.Publisher('kp_world_pos',MarkerArray, queue_size=10)
+        # kp points s
+        self.kp_poses = PoseArray()
+        self.kp_poses.header.frame_id = self.left_camera_frame
+        self.kp_pose_publisher = rospy.Publisher('kp_3d_poses', PoseArray, queue_size=10)
+        
         # Publishers
         self.center_point_publisher = rospy.Publisher("object_keypoints_ros/center", PointStamped, queue_size=1)
-        self.point0_pub = rospy.Publisher("object_keypoints_ros/0", PointStamped, queue_size=1)
-        self.point1_pub = rospy.Publisher("object_keypoints_ros/1", PointStamped, queue_size=1)
-        self.point2_pub = rospy.Publisher("object_keypoints_ros/2", PointStamped, queue_size=1)
-        self.point3_pub = rospy.Publisher("object_keypoints_ros/3", PointStamped, queue_size=1)
         self.left_heatmap_pub = rospy.Publisher("object_keypoints_ros/heatmap_left", Image, queue_size=1)
         self.right_heatmap_pub = rospy.Publisher("object_keypoints_ros/heatmap_right", Image, queue_size=1)
         self.pose_pub = rospy.Publisher("object_keypoints_ros/pose", PoseStamped, queue_size=1)
@@ -128,10 +135,10 @@ class ObjectKeypointPipeline:
         else:
             self.bbox_size = None
 
-    def _right_image_callback(self, image):
-        img = self.bridge.imgmsg_to_cv2(image, 'rgb8')
-        self.right_image = img
-        self.right_image_ts = image.header.stamp
+    # def _right_image_callback(self, image):
+    #     img = self.bridge.imgmsg_to_cv2(image, 'rgb8')
+    #     self.right_image = img
+    #     self.right_image_ts = image.header.stamp
 
     def _left_image_callback(self, image):
         img = self.bridge.imgmsg_to_cv2(image, 'rgb8')
@@ -185,7 +192,13 @@ class ObjectKeypointPipeline:
 
     def _publish_result(self,image):
         image_msg = self.bridge.cv2_to_imgmsg(image[:, :, :3], encoding='passthrough')
+        image_msg.header.stamp = self.left_image_ts
         self.result_img_pub.publish(image_msg)
+        #self.kp_publisher.publish(self.kpArray)
+
+    def _publish_kp_3d_poses(self):
+        self.kp_poses.header.stamp = self.left_image_ts
+        self.kp_pose_publisher.publish(self.kp_poses)
 
     def _to_heatmap(self, target):
         target = np.clip(target, 0.0, 1.0)
@@ -210,12 +223,38 @@ class ObjectKeypointPipeline:
 
             left_rgb = self._to_image(left_image)
             image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
+            
             points_left = []
+            self.kp_poses.poses.clear()
+            self.kpArray.markers.clear()
             for obj in objects:
                 p_left = np.concatenate([p + 1.0 for p in obj['keypoints_left'] if p.size != 0], axis=0)
-                rospy.loginfo(p_left)
+                kp_num = len(obj['p_L'])
+                rospy.loginfo(obj['p_L'])
+                rospy.loginfo("kp num: ")
+                rospy.loginfo(kp_num)
+                if kp_num == 0:
+                    return 
+                for i, p_l in enumerate(obj['p_L']):
+                    if p_l is None:
+                        continue
+                    rospy.loginfo(p_l)
+                    self.kp_pose = Pose()
+                    self.kp_pose.orientation.w = 1.0
+                    self.kp_pose.orientation.x = 0.0
+                    self.kp_pose.orientation.y = 0.0
+                    self.kp_pose.orientation.z = 0.0
+                    self.kp_pose.position.x = p_l[0][0]
+                    self.kp_pose.position.y = p_l[0][1]
+                    self.kp_pose.position.z = p_l[0][2]
+                    self.kp_poses.poses.append(self.kp_pose)
+                #rospy.loginfo(p_left)
                 points_left.append(p_left)
+
             self._publish_result(image_left)
+            self._publish_kp_3d_poses()
+            
+
             
 if __name__ == "__main__":
     with torch.no_grad():
