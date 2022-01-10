@@ -90,63 +90,6 @@ class KeypointExtractionComponent:
 
         return keypoints, confidence
 
-class AssociationComponent:
-    def __init__(self):
-        self.stereo_camera = None
-
-    def reset(self, stereo_camera):
-        self.stereo_camera = stereo_camera
-        default_point = np.array([0.0, 0.0, 0.6])[None]
-        self.cutoff = stereo_camera.left_camera.image_size[0] / 2.0
-        self.diff_LR = (self.stereo_camera.left_camera.project(default_point) -
-                self.stereo_camera.right_camera.project(default_point, self.stereo_camera.T_RL))
-
-    def __call__(self, left_points, right_points):
-        """
-        returns: integer array of length equal to the amount of left keypoints.
-        Each index corresponds to the index of the right keypoint the left keypoint corresponds to.
-        If a correspondence can't be found, -1 is set for that left keypoint.
-        """
-        ones_left = np.ones((left_points.shape[0], 1))
-        ones_right = np.ones((right_points.shape[0], 1))
-        left_keypoints = np.concatenate([left_points, ones_left], axis=1)
-        right_keypoints = np.concatenate([right_points, ones_right], axis=1)
-        distances = np.zeros((left_keypoints.shape[0], right_keypoints.shape[0]))
-        for i, left in enumerate(left_keypoints):
-            for j, right in enumerate(right_keypoints):
-                distances[i, j] = np.abs(right[None, :] @ self.stereo_camera.F @ left[:, None])
-
-        correspondences = np.zeros((left_keypoints.shape[0],), dtype=np.int32)
-        for i in range(left_keypoints.shape[0]):
-            within_bounds  = distances[i, :] < self.cutoff
-            possible_matches = within_bounds.sum()
-            if possible_matches == 1:
-                correspondences[i] = distances[i, :].argmin()
-            elif possible_matches > 1:
-                # If there are several matches along the epipolar line,
-                # assume a constant depth, and figure out which point
-                # is closer.
-                left = left_points[i]
-                indices = np.argwhere(within_bounds).ravel()
-                right = right_points[indices, :] + self.diff_LR
-                diffs = np.linalg.norm(left - right, axis=1)
-                correspondences[i] = indices[diffs.argmin()]
-            else:
-                correspondences[i] = -1
-        return correspondences
-
-class TriangulationComponent:
-    name = "triangulation"
-
-    def __init__(self):
-        self.stereo_camera = None
-
-    def reset(self, stereo_camera):
-        self.stereo_camera = stereo_camera
-
-    def __call__(self, left_keypoints, right_keypoints):
-        return self.stereo_camera.triangulate(left_keypoints, right_keypoints)
-
 class ObjectExtraction:
     def __init__(self, keypoint_config, prediction_size):
         self.keypoint_config = keypoint_config['keypoint_config']
@@ -233,8 +176,8 @@ class ObjectKeypointPipeline:
         self.object_extraction = ObjectExtraction(keypoint_config, prediction_size)
         self.detection_to_point = DetectionToPoint()
 
-    def reset(self, stereo_camera):
-        self.detection_to_point.reset(stereo_camera.left_camera)
+    def reset(self, camera):
+        self.detection_to_point.reset(camera)
 
     def __call__(self, heatmap, p_depth, p_centers):
         assert heatmap.shape[0] == 1, "One at the time, please."
@@ -251,8 +194,8 @@ class ObjectKeypointPipeline:
                 world_points.append(point)
             objects.append({
                 'p_centers': obj['p_centers'],
-                'keypoints_left': [obj['center'][None]] + obj['heatmap_points'],
-                'p_L': world_points
+                'keypoints': [obj['center'][None]] + obj['heatmap_points'],
+                'p_C': world_points
             })
         return objects
 
