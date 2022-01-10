@@ -1,0 +1,10 @@
+center_weight: 1.0
+dropout: 0.1
+features: 128
+keypoint_config:
+  keypoint_config:
+  - 1
+  - 1
+  - 1
+lr: 0.004
+weight_decay: 0.01

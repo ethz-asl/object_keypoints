@@ -4,15 +4,27 @@ import os
 import subprocess
 import time
 
+
+# TOPICS_TO_RECORD = [
+#     '/tf_static',
+#     '/tf',
+#     '/zedm/zed_node/left_raw/camera_info',
+#     '/zedm/zed_node/left_raw/image_raw_color',
+#     '/zedm/zed_node/right_raw/camera_info',
+#     '/zedm/zed_node/right_raw/image_raw_color',
+#     '/joint_states'
+# ]
+
 TOPICS_TO_RECORD = [
     '/tf_static',
     '/tf',
-    '/zedm/zed_node/left_raw/camera_info',
-    '/zedm/zed_node/left_raw/image_raw_color',
-    '/zedm/zed_node/right_raw/camera_info',
-    '/zedm/zed_node/right_raw/image_raw_color',
-    '/joint_states'
+    # '/camera/color/image_raw',
+    '/camera/color/image_raw/downsample',
+    '/camera/color/camera_info',
+    '/camera/depth/camera_info'
+    '/panda/joint_states'
 ]
+
 
 def read_args():
     parser = argparse.ArgumentParser()

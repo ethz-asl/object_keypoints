@@ -72,7 +72,7 @@ class KeypointNet(nn.Module):
         sys_cfg = SystemConfig().update_config(config)
         net = load_nnet(sys_cfg, corner_net)
         if torch.cuda.is_available():
-            net.load_pretrained_params('./models/corner_net.pkl')
+            net.load_pretrained_params('../corner_model/CornerNet_Squeeze_500000.pkl')
         else:
             print('Cuda not available. Will not load pretrained params')
         return net.model.module.hg

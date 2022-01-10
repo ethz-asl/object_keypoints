@@ -16,7 +16,7 @@ hud.set_data_directory(os.path.dirname(hud.__file__))
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
-    parser.add_argument('--calibration', default='config/calibration.yaml', help="Calibration yaml file.")
+    parser.add_argument('--calibration', default='config/realsense_D415.yaml', help="Calibration yaml file.")
     parser.add_argument('--rate', '-r', default=30, help="Frames per second.")
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()

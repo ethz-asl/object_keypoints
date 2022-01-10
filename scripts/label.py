@@ -13,12 +13,16 @@ from skvideo import io as video_io
 from perception.utils import linalg
 from constants import *
 from perception.utils import camera_utils
+from scipy.optimize import least_squares
+
+hud.set_data_directory(os.path.dirname(hud.__file__))
 
 def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
-    parser.add_argument('--calibration', type=str, default='config/calibration.yaml',
+    parser.add_argument('--calibration', type=str, default='config/realsense_D415.yaml',
             help="Path to kalibr calibration file.")
+    parser.add_argument('--refine', type=bool, default=False, help="if refine the current 3d keypoints with redundant label")
     return parser.parse_args()
 
 def _write_points(out_file, Xs):
@@ -90,6 +94,13 @@ class LabelingApp:
         self._create_views()
         self.hdf = None
         self.done = False
+        if self.flags.refine:
+            print("this is in refine mode, create two empty frames")
+            self.new_frame_keypoints = []
+            self.new_keypoints = []
+            self.new_T = []
+            self.ref_keypoints = []
+            self.frame_idxs = []
 
     def _create_views(self):
         self.window = hud.AppWindow("StereoLabeler", 1920, 540)
@@ -166,9 +177,43 @@ class LabelingApp:
         self.left_image_pane.set_texture(left_frame)
         self.right_image_pane.set_texture(right_frame)
 
-        keypoint_path = os.path.join(path, KEYPOINT_FILENAME)
-        if os.path.exists(keypoint_path):
-            self._load_points(keypoint_path)
+        self.keypoint_path = os.path.join(path, KEYPOINT_FILENAME)
+        if os.path.exists(self.keypoint_path) and (self.flags.refine is False):
+            self._load_points(self.keypoint_path)
+    
+    def _cal_reprojection_error(self):
+        for i, [new_points, ref_idx] in enumerate(zip(self.new_keypoints,self.frame_idxs)):
+            for i,point in enumerate(self.world_points):
+                T = self.hdf['camera_transform'][ref_idx]
+                reproj_point = _project(point, T, self.K, self.D)
+
+    def _refine_points(self):
+        print("Run Least-Squared Optimization given the current new labels")
+        print("Current path: ",  self.keypoint_path)
+        with open(self.keypoint_path, 'rt') as f:
+            keypoints = json.loads(f.read())
+            self.world_points = [np.array(x).reshape(4, 1) for x in keypoints['3d_points']]
+            self._cal_reprojection_error()
+
+            # self.left_keypoints = []
+            # self.right_keypoints = []
+            # for i,point in enumerate(self.world_points):
+            #     T_WL = self.hdf['camera_transform'][self.left_frame_index]
+            #     T_WR = self.hdf['camera_transform'][self.right_frame_index]
+            #     left_point = _project(point, T_WL, self.K, self.D)
+            #     right_point = _project(point, T_WR, self.K, self.D)
+            #     left_hud = hud.Point(left_point[0], left_point[1])
+            #     left_ndc = hud.utils.to_normalized_device_coordinates(left_hud, IMAGE_RECT)
+            #     right_hud = hud.Point(right_point[0], right_point[1])
+            #     right_ndc = hud.utils.to_normalized_device_coordinates(right_hud, IMAGE_RECT)
+            #     self.left_points.add_point(left_ndc, KEYPOINT_COLOR)
+            #     self.right_points.add_point(right_ndc, KEYPOINT_COLOR)
+            #     self.commands.append(AddLeftPointCommand(left_hud, IMAGE_RECT))
+            #     self.commands.append(AddRightPointCommand(right_hud, IMAGE_RECT))
+            #     self.left_keypoints.append(left_hud)
+            #     self.right_keypoints.append(right_hud)
+            #     print("left points ", i, " is ", left_point)
+            #     print("right points: ", i, " is ", right_point)
 
     def _load_points(self, keypoint_file):
         #TODO: Either use backprojected keypoints or store which frame was used to select keypoints.
@@ -205,15 +250,24 @@ class LabelingApp:
         self.camera = camera_utils.FisheyeCamera(self.K, self.D, camera['resolution'][::-1])
 
     def _left_pane_clicked(self, event):
+        print(f"left pane clicked {event.p.x} {event.p.y}")
         command = AddLeftPointCommand(event.p, self.left_image_pane.get_rect())
         command.forward(self)
+        if self.flags.refine:
+            print("added left point: ", command.image_point.x, command.image_point.y )
+            self.new_keypoints.append(np.array([command.image_point.x,command.image_point.y]))
+            self.frame_idxs.append(self.left_frame_index)
+            print("current frame's new keypoints: ", self.new_keypoints)
+            print("current frame's idx: ", self.frame_idxs)
         self.commands.append(command)
         self._save()
 
     def _right_pane_clicked(self, event):
-        print(f"left pane clicked {event.p.x} {event.p.y}")
+        print(f"right pane clicked {event.p.x} {event.p.y}")
         command = AddRightPointCommand(event.p, self.right_image_pane.get_rect())
         command.forward(self)
+        if self.flags.refine:
+            print("added right point: ", command.image_point.x, command.image_point.y )
         self.commands.append(command)
         self._save()
 
@@ -222,6 +276,12 @@ class LabelingApp:
         left_frame = self.video[self.left_frame_index]
         self.left_image_pane.set_texture(left_frame)
         self.left_keypoints = []
+
+        self.new_frame_keypoints.append(self.new_keypoints)
+        self.new_keypoints = []
+
+        print(" all new keypoints: ", self.new_frame_keypoints)
+
         self.left_points.clear_points()
         self._recompute_points()
 
@@ -262,6 +322,8 @@ class LabelingApp:
             self._swap_right_frame()
         elif event.key == '\x00':
             self.next_example()
+        elif event.key == 'R' and self.flags.refine:
+            self._refine_points()
 
     def undo(self):
         if len(self.commands) != 0:
@@ -278,7 +340,7 @@ class LabelingApp:
             return self.window.update()
 
     def _save(self):
-        if len(self.left_keypoints) == len(self.right_keypoints):
+        if len(self.left_keypoints) == len(self.right_keypoints) and (self.flags.refine is False):
             self.left_backprojected_points.set_points([], np.zeros((0, 4)))
             self.right_backprojected_points.set_points([], np.zeros((0, 4)))
             self.world_points = []
@@ -292,6 +354,10 @@ class LabelingApp:
             out_file = os.path.join(self.current_dir, KEYPOINT_FILENAME)
             print("Saving points")
             _write_points(out_file, self.world_points)
+        if self.flags.refine is True:
+            for i, [left, right] in enumerate(zip(self.left_keypoints, self.right_keypoints)):
+                print("now in left kp: ", i ," is " , "[ ",left.x, left.y," ]")
+                print("now in right kp: ", i , " is ", "[ ", right.x, right.y, " ]")
 
     def _triangulate(self, left_point, right_point):
         T_WL = self.hdf['camera_transform'][self.left_frame_index]
