@@ -6,7 +6,7 @@ import sys
 
 from numpy.core.fromnumeric import size
 sys.path.insert(0, '/home/boyang/catkin_ws/devel/lib/python3/dist-packages')
-sys.path.insert(0, '/home/boyang/thesis/perception/object_keypoint_mono')
+sys.path.insert(0, '/home/boyang/thesis/perception/kp_new')
 import json
 
 import rospy

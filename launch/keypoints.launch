@@ -1,7 +1,7 @@
 <?xml version="1.0" ?>
 <launch>
   <arg name="load_cam" default="false"/>
-  <arg name="load_bag" default="true"/>
+  <arg name="load_bag" default="false"/>
   <arg name="load_vistools" default="false"/>
 
   <node name="object_keypoints_ros" pkg="object_keypoints_ros" type="run_pipeline.py" output="screen">
