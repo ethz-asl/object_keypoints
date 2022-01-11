@@ -8,7 +8,7 @@
     <param name="left_image_topic" value="/camera/color/image_raw" />
     <param name="right_image_topic" value="/camera/color/image_raw" />
     <param name="left_camera_frame" value="camera_color_optical_frame" />
-    <param name="load_model" value="$(find object_keypoints_ros)/models/cups_depth.pt" />
+    <param name="load_model" value="$(find object_keypoints_ros)/models/model_20.pt" />
     <param name="calibration" value="$(find object_keypoints_ros)/config/calibration.yaml" />
     <param name="keypoints" value="$(find object_keypoints_ros)/config/cups.json" />
     <param name="pnp" value="false" type="bool" />

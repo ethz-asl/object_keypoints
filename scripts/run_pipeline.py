@@ -20,7 +20,7 @@ from scipy.spatial.transform import Rotation
 from geometry_msgs.msg import PointStamped, PoseStamped, PoseArray, Pose
 from perception.utils import ros as ros_utils
 from sensor_msgs.msg import Image
-from perception.datasets.video import StereoVideoDataset
+from perception.datasets.video import SceneDataset
 from perception import pipeline
 from perception.utils import camera_utils
 from matplotlib import cm
@@ -55,7 +55,8 @@ class ObjectKeypointPipeline:
         self.use_gpu = rospy.get_param("object_keypoints_ros/gpu", True)
         self.input_size = (511, 511)
         self.IMAGE_SIZE = (511, 511)
-        self.prediction_size = StereoVideoDataset.prediction_size
+        self.prediction_size = SceneDataset.prediction_size
+        self.image_offset = SceneDataset.image_offset
 
         self.keypoint_config_path = rospy.get_param('object_keypoints_ros/keypoints')
         with open(self.keypoint_config_path, 'rt') as f:
@@ -75,7 +76,12 @@ class ObjectKeypointPipeline:
         
         self._read_calibration()
         scaling_factor = np.array(self.image_size) / np.array(self.prediction_size)
-        self.pipeline.reset(self.stereo_camera)
+        
+        # Stereo version
+        # self.pipeline.reset(self.stereo_camera)
+
+        # Monocular Version
+        self.pipeline.reset(self.camera_small)
 
         self._compute_bbox_dimensions()
 
@@ -118,8 +124,17 @@ class ObjectKeypointPipeline:
         self.left_camera = left_camera
         self.right_camera = right_camera
 
-        self.stereo_camera = camera_utils.StereoCamera(self.left_camera, self.right_camera, params['T_RL'])
+        # Stereo version
+        # self.stereo_camera = camera_utils.StereoCamera(self.left_camera, self.right_camera, params['T_RL'])
         #self.stereo_camera_small = camera_utils.StereoCamera(left_camera, right_camera, params['T_RL'])
+        
+        # Cooperate with monocular version
+        camera = camera_utils.FisheyeCamera(params['K'], params['D'], params['image_size'])
+        camera = camera.scale(SceneDataset.height_resized / SceneDataset.height)
+        self.camera = camera.cut(self.image_offset)
+
+        scale_small = self.prediction_size[0] / SceneDataset.height_resized
+        self.camera_small = camera.cut(self.image_offset).scale(scale_small)
 
     def _read_keypoints(self):  # not included in prediction process
         path = rospy.get_param('object_keypoints_ros/keypoints')
@@ -207,7 +222,7 @@ class ObjectKeypointPipeline:
         return cv2.resize(target[:, :, :3], self.IMAGE_SIZE)
 
     def _to_image(self, frame):
-        frame = StereoVideoDataset.to_image(frame)
+        frame = SceneDataset.to_image(frame)
         return cv2.resize(frame, self.IMAGE_SIZE)
 
     def step(self):
@@ -228,14 +243,14 @@ class ObjectKeypointPipeline:
             self.kp_poses.poses.clear()
             self.kpArray.markers.clear()
             for obj in objects:
-                p_left = np.concatenate([p + 1.0 for p in obj['keypoints_left'] if p.size != 0], axis=0)
-                kp_num = len(obj['p_L'])
-                rospy.loginfo(obj['p_L'])
+                p_left = np.concatenate([p + 1.0 for p in obj['keypoints'] if p.size != 0], axis=0)
+                kp_num = len(obj['p_C'])
+                rospy.loginfo(obj['p_C'])
                 rospy.loginfo("kp num: ")
                 rospy.loginfo(kp_num)
                 if kp_num == 0:
                     return 
-                for i, p_l in enumerate(obj['p_L']):
+                for i, p_l in enumerate(obj['p_C']):
                     if p_l is None:
                         continue
                     rospy.loginfo(p_l)
