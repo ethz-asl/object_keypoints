@@ -111,7 +111,7 @@ class Runner:
                     pose_data.append(item)
                     i += 1
                 except tf2.ExtrapolationException:
-                    print("Extrapolation exception. Skipping entry {} left.".format(i))
+                    print("Extrapolation exception. Skipping entry {}.".format(i))
 
         return pose_data
 
@@ -130,7 +130,7 @@ class Runner:
 
         out_file = os.path.join(out_folder, 'frames.mp4')
         preview = os.path.join(out_folder, 'frames_preview.mp4')
-        print("Encoding video {} left".format(bag_name))
+        print("Encoding video {}".format(bag_name))
 
         _encode_full_video(frame_data, out_file)
         _encode_preview(out_file, preview)

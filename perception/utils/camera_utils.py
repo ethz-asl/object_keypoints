@@ -3,7 +3,7 @@ import cv2
 import yaml
 from . import linalg
 
-class FisheyeCamera:
+class PinholeCamera:
     def __init__(self, K, D, image_size):
         # Camera matrix
         self.K = K
@@ -27,6 +27,40 @@ class FisheyeCamera:
         image_size = self.image_size - 2.0 * offset[::-1]
         return FisheyeCamera(K, self.D, image_size)
 
+    def unproject(self, xys, zs):
+        xs = np.concatenate([xys, np.ones((xys.shape[0], 1))], axis=1)
+        X = (self.Kinv @ xs[:, :, None])[:, :, 0] * zs[:, None]
+        return X
+
+    def in_frame(self, x):
+        """
+        x: N x 2 array of points in image frame
+        returns: N array of boolean values
+        """
+        under = (x <= 0.0).any(axis=1)
+        over  = (x >= self.image_size).any(axis=1)
+        return np.bitwise_or(under, over) == False
+
+class RadTanPinholeCamera(PinholeCamera):
+    def project(self, X, T_CW=np.eye(4)):
+        """
+        X: N x 3 points in world frame as define by T_CW
+        returns: N x 2 points in image coordinates.
+        """
+        R, _ = cv2.Rodrigues(T_CW[:3, :3])
+        x, _ = cv2.projectPoints(X[:, None, :], R, T_CW[:3, 3], self.K, self.D)
+        x = x[:, 0]
+        return x
+
+    def undistort(self, xy):
+        """
+        xy: N x 2 image points
+        returns: N x 2 undistorted image points.
+        """
+        return cv2.undistortPoints(xy[:, None, :], self.K, self.D,
+                P=self.K)[:, 0, :]
+
+class FisheyeCamera(PinholeCamera):
     def project(self, X, T_CW=np.eye(4)):
         """
         X: N x 3 points in world frame as define by T_CW
@@ -37,11 +71,6 @@ class FisheyeCamera:
         x = x[:, 0]
         return x
 
-    def unproject(self, xys, zs):
-        xs = np.concatenate([xys, np.ones((xys.shape[0], 1))], axis=1)
-        X = (self.Kinv @ xs[:, :, None])[:, :, 0] * zs[:, None]
-        return X
-
     def undistort(self, xy):
         """
         xy: N x 2 image points
@@ -49,15 +78,6 @@ class FisheyeCamera:
         """
         return cv2.fisheye.undistortPoints(xy[:, None, :], self.K, self.D,
                 P=self.K)[:, 0, :]
-
-    def in_frame(self, x):
-        """
-        x: N x 2 array of points in image frame
-        returns: N array of boolean values
-        """
-        under = (x <= 0.0).any(axis=1)
-        over  = (x >= self.image_size).any(axis=1)
-        return np.bitwise_or(under, over) == False
 
 
 class StereoCamera:
@@ -110,6 +130,8 @@ def from_calibration(calibration_file):
         D = np.array(camera['distortion_coeffs'])
         if camera['distortion_model'] == 'equidistant' and camera['camera_model'] == 'pinhole':
             return FisheyeCamera(K, D, camera['resolution'][::-1])
+        elif camera['distortion_model'] == 'radtan' and camera['camera_model'] == 'pinhole':
+            return RadTanPinholeCamera(K, D, camera['resolution'][::-1])
         else:
             raise ValueError(f"Unrecognized calibration type {camera['distortion_model']}.")
 
