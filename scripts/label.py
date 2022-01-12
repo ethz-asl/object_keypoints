@@ -11,7 +11,7 @@ import random
 import yaml
 from skvideo import io as video_io
 from perception.utils import linalg
-from constants import *
+from perception.constants import *
 from perception.utils import camera_utils
 
 def read_args():

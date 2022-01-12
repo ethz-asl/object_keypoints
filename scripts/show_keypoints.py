@@ -6,12 +6,11 @@ import hud
 import h5py
 import numpy as np
 import cv2
-import constants
 import yaml
 import random
 from skvideo import io as video_io
+from perception import constants
 from perception.utils import camera_utils, Rate, linalg
-hud.set_data_directory(os.path.dirname(hud.__file__))
 
 def read_args():
     parser = argparse.ArgumentParser()
