@@ -93,12 +93,4 @@ Here are some general tips that might be of use:
 - Collect data in all the operating conditions in which you will want to be detecting keypoints at.
 
 
-## Using your own sensor and robot
-
-The `collect_bags.py` has some hard coded topic names. Update those to match whatever you are using.
-
-TODO:
-- Remove hardcoded topics from `collect_bags.py`
-- Update the dataloader to use the new data format.
-- Update the evaluation script and visualizer to only use one stream of images.
 
