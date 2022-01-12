@@ -29,13 +29,6 @@ def _write_points(out_file, Xs):
     with open(out_file, 'w') as f:
         f.write(json.dumps(contents))
 
-def _project(p_WK, T_WC, K, D):
-    T_CW = np.linalg.inv(T_WC.astype(np.float64))
-    p_WK = p_WK / p_WK[3]
-    R, _ = cv2.Rodrigues(T_CW[:3, :3])
-    point, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3, 0], R, T_CW[:3, 3], K, D)
-    return point.ravel()
-
 BACKPROJECTED_POINT_COLOR = np.array([0.0, 0.0, 1.0, 1.0])
 
 class PointCommand:
@@ -81,7 +74,6 @@ class LabelingApp:
         self.flags = flags
         self.current_dir = None
         self.video = None
-        self.K = None
         self.commands = []
         self.left_keypoints = []
         self.right_keypoints = []
@@ -181,8 +173,11 @@ class LabelingApp:
             for point in self.world_points:
                 T_WL = self.hdf['camera_transform'][self.left_frame_index]
                 T_WR = self.hdf['camera_transform'][self.right_frame_index]
-                left_point = _project(point, T_WL, self.K, self.D)
-                right_point = _project(point, T_WR, self.K, self.D)
+                T_LW = linalg.inv_transform(T_WL)
+                T_RW = linalg.inv_transform(T_WR)
+                left_point = self.camera.project(point[:3].T, T_LW)[0]
+                right_point = self.camera.project(point[:3].T, T_RW)[0]
+
                 left_hud = hud.Point(left_point[0], left_point[1])
                 left_ndc = hud.utils.to_normalized_device_coordinates(left_hud, IMAGE_RECT)
                 right_hud = hud.Point(right_point[0], right_point[1])
@@ -195,14 +190,8 @@ class LabelingApp:
                 self.right_keypoints.append(right_hud)
 
     def _load_camera_params(self):
-        calibration_file = self.flags.calibration
-        with open(calibration_file, 'rt') as f:
-            calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        camera = calibration['cam0']
+        self.camera = camera_utils.from_calibration(self.flags.calibration)
 
-        self.K = camera_utils.camera_matrix(camera['intrinsics'])
-        self.D = np.array(camera['distortion_coeffs'])
-        self.camera = camera_utils.FisheyeCamera(self.K, self.D, camera['resolution'][::-1])
 
     def _left_pane_clicked(self, event):
         command = AddLeftPointCommand(event.p, self.left_image_pane.get_rect())
@@ -296,19 +285,19 @@ class LabelingApp:
     def _triangulate(self, left_point, right_point):
         T_WL = self.hdf['camera_transform'][self.left_frame_index]
         T_WR = self.hdf['camera_transform'][self.right_frame_index]
-        T_LW = np.linalg.inv(T_WL)
-        T_RW = np.linalg.inv(T_WR)
+        T_LW = linalg.inv_transform(T_WL)
+        T_RW = linalg.inv_transform(T_WR)
         T_LR = T_LW @ T_WR
         T_RL = T_RW @ T_WL
 
         x = np.array([left_point.x, left_point.y])[:, None]
         xp = np.array([right_point.x, right_point.y])[:, None]
 
-        P1 = camera_utils.projection_matrix(self.K, np.eye(4))
-        P2 = self.K @ np.eye(3, 4) @ T_RL
+        P1 = camera_utils.projection_matrix(self.camera.K, np.eye(4))
+        P2 = self.camera.K @ np.eye(3, 4) @ T_RL
 
-        x = cv2.fisheye.undistortPoints(x[None, None, :, 0], self.K, self.D, P=self.K).ravel()[:, None]
-        xp = cv2.fisheye.undistortPoints(xp[None, None, :, 0], self.K, self.D, P=self.K).ravel()[:, None]
+        x = self.camera.undistort(x.T).T
+        xp = self.camera.undistort(xp.T).T
 
         p_LK = cv2.triangulatePoints(P1, P2, x, xp)
         p_LK = p_LK / p_LK[3]
@@ -317,19 +306,17 @@ class LabelingApp:
 
     def _backproject_left(self, p_WK):
         T_WL = self.hdf['camera_transform'][self.left_frame_index]
-        T_LW = np.linalg.inv(T_WL)
+        T_LW = linalg.inv_transform(T_WL)
         p_WK = (p_WK / p_WK[3])
-        R, _ = cv2.Rodrigues(T_LW[:3, :3])
-        projected_x, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3, 0], R, T_LW[:3, 3], self.K, self.D)
+        projected_x = self.camera.project(p_WK[:3].T, T_LW)
         projected_x = projected_x.ravel()
         left_backprojected = hud.Point(projected_x[0], projected_x[1])
         return hud.utils.to_normalized_device_coordinates(left_backprojected, IMAGE_RECT)
 
     def _backproject_right(self, p_WK):
         T_WR = self.hdf['camera_transform'][self.right_frame_index]
-        T_RW = np.linalg.inv(T_WR)
-        R, _ = cv2.Rodrigues(T_RW[:3, :3])
-        projected_x, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3, 0], R, T_RW[:3, 3], self.K, self.D)
+        T_RW = linalg.inv_transform(T_WR)
+        projected_x = self.camera.project(p_WK[:3].T, T_RW)
         projected_x = projected_x.ravel()
         right_backprojected = hud.Point(projected_x[0], projected_x[1])
         return hud.utils.to_normalized_device_coordinates(right_backprojected, IMAGE_RECT)

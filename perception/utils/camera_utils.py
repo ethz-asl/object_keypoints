@@ -101,6 +101,18 @@ def projection_matrix(camera_matrix, T_CW):
     """
     return camera_matrix @ T_CW[:3, :]
 
+def from_calibration(calibration_file):
+    with open(calibration_file, 'rt') as f:
+        calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        camera = calibration['cam0']
+
+        K = camera_matrix(camera['intrinsics'])
+        D = np.array(camera['distortion_coeffs'])
+        if camera['distortion_model'] == 'equidistant' and camera['camera_model'] == 'pinhole':
+            return FisheyeCamera(K, D, camera['resolution'][::-1])
+        else:
+            raise ValueError(f"Unrecognized calibration type {camera['distortion_model']}.")
+
 def load_calibration_params(calibration_file):
     with open(calibration_file, 'rt') as f:
         calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)

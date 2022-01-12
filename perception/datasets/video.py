@@ -112,9 +112,7 @@ class SceneDataset(IterableDataset):
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
-        calibration = camera_utils.load_calibration_params(calibration_file)
-        self.K = calibration['K']
-        self.D = calibration['D']
+        self.camera = camera_utils.from_calibration(calibration_file)
 
     def _init_points(self):
         filepath = os.path.join(self.base_dir, 'keypoints.json')
@@ -192,12 +190,9 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
     def _extract_example(self, T_WC, frame):
         T_CW = linalg.inv_transform(T_WC)
 
-        p_WK = self.world_points[:, :, None]
+        p_WK = self.world_points[:, :3]
 
-        R, _ = cv2.Rodrigues(T_CW[:3, :3])
-
-        projected, _ = cv2.fisheye.projectPoints(self.world_points[:, None, :3], R, T_CW[:3, 3], self.K, self.D)
-        projected = projected[:, 0, :]
+        projected = self.camera.project(p_WK, T_CW)
 
         out = self.augmentations(image=frame, keypoints=projected)
 

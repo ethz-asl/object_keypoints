@@ -43,13 +43,7 @@ class ViewModel:
         self.hdf = h5py.File(os.path.join(base_dir, 'data.hdf5'), 'r')
         self.num_frames = self.hdf['camera_transform'].shape[0]
 
-        calibration_file = self.flags.calibration
-        with open(calibration_file, 'rt') as f:
-            calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        camera = calibration['cam0']
-
-        self.K = camera_utils.camera_matrix(camera['intrinsics'])
-        self.D = np.array(camera['distortion_coeffs'])
+        self.camera = camera_utils.from_calibration(self.flags.calibration)
 
     def close(self):
         self.hdf.close()
@@ -66,7 +60,7 @@ class ViewModel:
         R_c, _ = cv2.Rodrigues(T_CW[:3, :3])
         frame_points = []
         for p_WK in self.world_points:
-            p_c, _ = cv2.fisheye.projectPoints(p_WK[None, None, :3], R_c, T_CW[:3, 3], self.K, self.D)
+            p_c = self.camera.project(p_WK[None, :3], T_CW)
             p_c = p_c.ravel()
 
             frame_points.append(
