@@ -12,7 +12,7 @@ class FisheyeCamera:
         self.D = D
         # height, width
         self.image_size = np.array(image_size)
-        assert np.abs(K[0, 2] * 2.0 - image_size[1]) < 0.05 * image_size[1]
+        # assert np.abs(K[0, 2] * 2.0 - image_size[1]) < 0.05 * image_size[1]
 
     def scale(self, scale):
         K = scale_camera_matrix(self.K, np.ones(2) * scale)

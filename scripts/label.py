@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import h5py
+from matplotlib.pyplot import axis
 import numpy as np
 import cv2
 import random
@@ -14,8 +15,9 @@ from perception.utils import linalg
 from constants import *
 from perception.utils import camera_utils
 from scipy.optimize import least_squares
+from numpy import linalg as LA
 
-hud.set_data_directory(os.path.dirname(hud.__file__))
+# hud.set_data_directory(os.path.dirname(hud.__file__))
 
 def read_args():
     parser = argparse.ArgumentParser()
@@ -34,6 +36,8 @@ def _write_points(out_file, Xs):
         f.write(json.dumps(contents))
 
 def _project(p_WK, T_WC, K, D):
+    if p_WK.ndim != 2:
+        p_WK = np.expand_dims(p_WK,axis=1)
     T_CW = np.linalg.inv(T_WC.astype(np.float64))
     p_WK = p_WK / p_WK[3]
     R, _ = cv2.Rodrigues(T_CW[:3, :3])
@@ -178,43 +182,57 @@ class LabelingApp:
         self.right_image_pane.set_texture(right_frame)
 
         self.keypoint_path = os.path.join(path, KEYPOINT_FILENAME)
-        if os.path.exists(self.keypoint_path) and (self.flags.refine is False):
+        if os.path.exists(self.keypoint_path):
             self._load_points(self.keypoint_path)
     
-    def _cal_reprojection_error(self):
-        for i, [new_points, ref_idx] in enumerate(zip(self.new_keypoints,self.frame_idxs)):
-            for i,point in enumerate(self.world_points):
+    def _opt_reprojection_error(self):
+        
+        print("added : ", len(self.new_frame_keypoints) , "  frames for nonlinear optimization")
+        
+        def optimize_3d_points(world_point):
+            world_point = np.append(world_point ,1.0)
+            print("inside: ", world_point)
+            error = 0
+            for i, [new_points, ref_idx] in enumerate(zip(self.new_frame_keypoints,self.frame_idxs)):
+                
                 T = self.hdf['camera_transform'][ref_idx]
-                reproj_point = _project(point, T, self.K, self.D)
-
+                reproj_point = _project(world_point, T, self.K, self.D)
+                # print("current: ",LA.norm(new_points[self.pt_idx]-reproj_point))
+                current_error = LA.norm(new_points[self.pt_idx]-reproj_point)
+                error = error + current_error
+                
+            print("reprojection error of point: ", self.pt_idx, "  is: ", error)
+            return error
+                
+        
+        ## solve least square
+        self_opt_world_points = np.empty(shape=np.shape(self.world_points))
+        for j,point in enumerate(self.world_points):
+            self.pt_idx = j
+            point = np.squeeze(point)
+            res = least_squares(optimize_3d_points,point[0:3],verbose=1)
+            res.x = np.append(res.x ,1)
+            opt_point = np.expand_dims(res.x,axis=1)
+            self_opt_world_points[j] = np.array(opt_point)
+                
+        # print(self.world_points)
+        # print(self_opt_world_points)
+        self.world_points = self_opt_world_points
+        out_file = os.path.join(self.current_dir, KEYPOINT_FILENAME)
+        print("Saving points")
+        _write_points(out_file, self.world_points)
+            
+         
     def _refine_points(self):
         print("Run Least-Squared Optimization given the current new labels")
         print("Current path: ",  self.keypoint_path)
         with open(self.keypoint_path, 'rt') as f:
             keypoints = json.loads(f.read())
             self.world_points = [np.array(x).reshape(4, 1) for x in keypoints['3d_points']]
-            self._cal_reprojection_error()
-
-            # self.left_keypoints = []
-            # self.right_keypoints = []
-            # for i,point in enumerate(self.world_points):
-            #     T_WL = self.hdf['camera_transform'][self.left_frame_index]
-            #     T_WR = self.hdf['camera_transform'][self.right_frame_index]
-            #     left_point = _project(point, T_WL, self.K, self.D)
-            #     right_point = _project(point, T_WR, self.K, self.D)
-            #     left_hud = hud.Point(left_point[0], left_point[1])
-            #     left_ndc = hud.utils.to_normalized_device_coordinates(left_hud, IMAGE_RECT)
-            #     right_hud = hud.Point(right_point[0], right_point[1])
-            #     right_ndc = hud.utils.to_normalized_device_coordinates(right_hud, IMAGE_RECT)
-            #     self.left_points.add_point(left_ndc, KEYPOINT_COLOR)
-            #     self.right_points.add_point(right_ndc, KEYPOINT_COLOR)
-            #     self.commands.append(AddLeftPointCommand(left_hud, IMAGE_RECT))
-            #     self.commands.append(AddRightPointCommand(right_hud, IMAGE_RECT))
-            #     self.left_keypoints.append(left_hud)
-            #     self.right_keypoints.append(right_hud)
-            #     print("left points ", i, " is ", left_point)
-            #     print("right points: ", i, " is ", right_point)
-
+            self._opt_reprojection_error()
+        self.new_frame_keypoints.clear()
+        self.frame_idxs.clear()
+        
     def _load_points(self, keypoint_file):
         #TODO: Either use backprojected keypoints or store which frame was used to select keypoints.
         # This wasn't a problem before swapping the frame was added.
@@ -250,15 +268,16 @@ class LabelingApp:
         self.camera = camera_utils.FisheyeCamera(self.K, self.D, camera['resolution'][::-1])
 
     def _left_pane_clicked(self, event):
+        
         print(f"left pane clicked {event.p.x} {event.p.y}")
         command = AddLeftPointCommand(event.p, self.left_image_pane.get_rect())
         command.forward(self)
+        
         if self.flags.refine:
-            print("added left point: ", command.image_point.x, command.image_point.y )
             self.new_keypoints.append(np.array([command.image_point.x,command.image_point.y]))
-            self.frame_idxs.append(self.left_frame_index)
-            print("current frame's new keypoints: ", self.new_keypoints)
-            print("current frame's idx: ", self.frame_idxs)
+            # print("current frame's new keypoints: ", self.new_keypoints)
+            # print("current frame's idx: ", self.frame_idxs)
+        
         self.commands.append(command)
         self._save()
 
@@ -266,21 +285,32 @@ class LabelingApp:
         print(f"right pane clicked {event.p.x} {event.p.y}")
         command = AddRightPointCommand(event.p, self.right_image_pane.get_rect())
         command.forward(self)
-        if self.flags.refine:
-            print("added right point: ", command.image_point.x, command.image_point.y )
+        # if self.flags.refine:
+        #     print("added right point: ", command.image_point.x, command.image_point.y )
         self.commands.append(command)
         self._save()
 
     def _swap_left_frame(self):
+        
+        if self.flags.refine:
+            if (len(self.new_keypoints)!= len(self.world_points)):
+                print("The current keypoints number should be: ", len(self.world_points))
+                print("But you have only labelled: ", len(self.new_keypoints))
+                return
+            
+            # in refine mode, add in the current frame id and keypoints
+            if self.flags.refine:
+                self.frame_idxs.append(self.left_frame_index)
+            if len(self.new_keypoints) > 1:
+                self.new_frame_keypoints.append(self.new_keypoints)
+            self.new_keypoints = []
+            # print(" all new keypoints: ", self.new_frame_keypoints)
+            # print(" all frames: ", self.frame_idxs)
+        
         self.left_frame_index = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
         left_frame = self.video[self.left_frame_index]
         self.left_image_pane.set_texture(left_frame)
         self.left_keypoints = []
-
-        self.new_frame_keypoints.append(self.new_keypoints)
-        self.new_keypoints = []
-
-        print(" all new keypoints: ", self.new_frame_keypoints)
 
         self.left_points.clear_points()
         self._recompute_points()
@@ -354,10 +384,10 @@ class LabelingApp:
             out_file = os.path.join(self.current_dir, KEYPOINT_FILENAME)
             print("Saving points")
             _write_points(out_file, self.world_points)
-        if self.flags.refine is True:
-            for i, [left, right] in enumerate(zip(self.left_keypoints, self.right_keypoints)):
-                print("now in left kp: ", i ," is " , "[ ",left.x, left.y," ]")
-                print("now in right kp: ", i , " is ", "[ ", right.x, right.y, " ]")
+        # if self.flags.refine is True:
+        #     for i, [left, right] in enumerate(zip(self.left_keypoints, self.right_keypoints)):
+        #         print("now in left kp: ", i ," is " , "[ ",left.x, left.y," ]")
+        #         print("now in right kp: ", i , " is ", "[ ", right.x, right.y, " ]")
 
     def _triangulate(self, left_point, right_point):
         T_WL = self.hdf['camera_transform'][self.left_frame_index]
