@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import argparse
 import cv2
 from turtle import right
 import random
@@ -19,7 +20,6 @@ from PyQt5.QtWidgets import QWidget, QLabel, QSizePolicy, QScrollArea, QMessageB
 
 
 # TODO change with flags
-PATH = "/home/user/object_keypoints/2022-01-17-16-30-09_valve_perception"
 CALIBRATION = "/home/user/calibration/intrinsics.yaml"
 
 class QCustomImage(QLabel):
@@ -28,6 +28,7 @@ class QCustomImage(QLabel):
         self.setBackgroundRole(QPalette.Base)
         self.setScaledContents(True)
         self.mousePressEvent = self._onImageClick
+        self.mouseClickEvent = None
         self.scrollArea = scrollArea
         self.button = button
         self._frameId = None
@@ -41,7 +42,7 @@ class QCustomImage(QLabel):
         assert self._video is not None
         self._keypoints = []
         self._frameId = id
-        self._updateImage(self._video[id])
+        self._updateImage()
 
     def getFrame(self):
         return self._video[self._frameId]
@@ -49,8 +50,8 @@ class QCustomImage(QLabel):
     def getKeypoints(self):
         return self._keypoints
 
-    def _updateImage(self, frame):
-        self.setPixmap(QPixmap.fromImage(self._np2qt_image(frame)))
+    def _updateImage(self):
+        self.setPixmap(QPixmap.fromImage(self._np2qt_image(self._video[self._frameId])))
 
     def _onImageClick(self, event):
         # TODO resize point according to the current resizing of the image
@@ -70,10 +71,13 @@ class QCustomImage(QLabel):
 
         self._keypoints.append((x, y))
 
-        frame = cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
-        self._updateImage(frame)
+        cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
+        self._updateImage()
 
         print(f"[image] clicked at ({x}, {y})")
+
+        if self.mouseClickEvent is not None:
+            self.mouseClickEvent()
 
     @staticmethod
     def _np2qt_image(img):
@@ -82,7 +86,7 @@ class QCustomImage(QLabel):
         return QImage(img.data, width, height, bytesPerLine, QImage.Format_RGB888)
 
 class QImageViewer(QMainWindow):
-    def __init__(self):
+    def __init__(self, flags):
         super().__init__()
 
         self.printer = QPrinter()
@@ -109,16 +113,17 @@ class QImageViewer(QMainWindow):
 
             button = QPushButton('Next', self)
             button.setToolTip('Move to the next frame')
-            button.clicked.connect(lambda: self._onNextClick(imageLabel))
+            button.clicked.connect(lambda: self._onNextClick(image))
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
-            imageLabel = QCustomImage(scrollArea=scrollArea, button=button)
+            image = QCustomImage(scrollArea=scrollArea, button=button)
+            image.mouseClickEvent = self.triangulate
 
-            scrollArea.setWidget(imageLabel)
+            scrollArea.setWidget(image)
             self.hlayout.addWidget(scrollArea)
             self.hblayout.addWidget(button)
 
-            return imageLabel
+            return image
 
         self.imageLeft = createSingleView()
         self.imageRight = createSingleView()
@@ -138,13 +143,29 @@ class QImageViewer(QMainWindow):
         self.setWindowTitle("Image Labeler Plus")
         self.resize(800, 600)
 
-        self.flags = None
         self.commands = []
         self.world_points = []
         self.alpha = 1.0
-        self.hdf = None
+        self.hdf = h5py.File(os.path.join(flags.base_dir, 'data.hdf5'), 'r')
         self.done = False
-        self.camera = None
+        self.camera = camera_utils.from_calibration(flags.calibration)
+        print(self.hdf['camera_transform'].shape[0], "poses")
+
+        video = video_io.vread(os.path.join(flags.base_dir, 'frames_preview.mp4'))
+        for image in self.images:
+            image.setVideo(video)
+
+        for image, frameId in zip(self.images, self._find_furthest()):
+            image.setFrameId(frameId)
+
+        self.printAct.setEnabled(True)
+        self.fitToWindowAct.setEnabled(True)
+        self.updateActions()
+
+        # TODO Need to add this back
+        # keypoint_path = os.path.join(path, KEYPOINT_FILENAME)
+        # if os.path.exists(keypoint_path):
+        #     self._load_points(keypoint_path)
 
     def showEvent(self, event):
         self.zoomImages()
@@ -154,9 +175,6 @@ class QImageViewer(QMainWindow):
         if self.fitToWindowAct.isChecked():
             self.zoomImages()
         QMainWindow.resizeEvent(self, event)
-
-    def _load_camera_params(self):
-        self.camera = camera_utils.from_calibration(CALIBRATION) #self.flags.calibration TODO(giuseppe) restore from flag
 
     def _onNextClick(self, image):
         frameId = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
@@ -184,32 +202,9 @@ class QImageViewer(QMainWindow):
                     smallest_index = (i, j)
         print("Furthest frames: ", *smallest_index)
         return smallest_index
-    
-    def setCurrentData(self, path):
-        self.done = False
-        self.world_points = []
-        
-        if self.hdf is not None:
-            self.hdf.close()
-        self.hdf = h5py.File(os.path.join(path, 'data.hdf5'), 'r')
-        self._load_camera_params()
-        print(self.hdf['camera_transform'].shape[0], "poses")
 
-        video = video_io.vread(os.path.join(path, 'frames_preview.mp4'))
-        for image in self.images:
-            image.setVideo(video)
-
-        for image, frameId in zip(self.images, self._find_furthest()):
-            image.setFrameId(frameId)
-
-        self.printAct.setEnabled(True)
-        self.fitToWindowAct.setEnabled(True)
-        self.updateActions()
-
-        # TODO Need to add this back
-        # keypoint_path = os.path.join(path, KEYPOINT_FILENAME)
-        # if os.path.exists(keypoint_path):
-        #     self._load_points(keypoint_path)
+    def triangulate(self):
+        print('Triangulating')
 
     def print(self):
         dialog = QPrintDialog(self.printer, self)
@@ -332,8 +327,13 @@ if __name__ == '__main__':
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
+    parser.add_argument('--calibration', type=str, default='config/calibration.yaml',
+                        help="Path to kalibr calibration file.")
+    flags = parser.parse_args()
+
     app = QApplication(sys.argv)
-    imageViewer = QImageViewer()
-    imageViewer.setCurrentData(PATH)
+    imageViewer = QImageViewer(flags)
     imageViewer.show()
     sys.exit(app.exec_())
