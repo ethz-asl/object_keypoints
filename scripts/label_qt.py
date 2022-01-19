@@ -22,6 +22,27 @@ from PyQt5.QtWidgets import QWidget, QLabel, QSizePolicy, QScrollArea, QMessageB
 PATH = "/home/user/object_keypoints/2022-01-17-16-30-09_valve_perception"
 CALIBRATION = "/home/user/calibration/intrinsics.yaml"
 
+class QCustomImageLabel(QLabel):
+    def __init__(self):
+        QLabel.__init__(self)
+        self.setBackgroundRole(QPalette.Base)
+        self.setScaledContents(True)
+        self._frameId = None
+        self._video = None
+
+    def setVideo(self, video):
+        self._video = video
+
+    def setFrame(self, id):
+        self._frameId = id
+        self.setPixmap(QPixmap.fromImage(self._np2qt_image(self._video[id])))
+
+    @staticmethod
+    def _np2qt_image(img):
+        height, width, channel = img.shape
+        bytesPerLine = 3 * width
+        return QImage(img.data, width, height, bytesPerLine, QImage.Format_RGB888)
+
 class QImageViewer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -32,9 +53,7 @@ class QImageViewer(QMainWindow):
         self.hblayout = QHBoxLayout()
 
         def createImage(imgCallback, btnCallback):
-            imageLabel = QLabel()
-            imageLabel.setBackgroundRole(QPalette.Base)
-            imageLabel.setScaledContents(True)
+            imageLabel = QCustomImageLabel()
             imageLabel.mousePressEvent = imgCallback
 
             class QCustomScrollArea(QScrollArea):
@@ -63,8 +82,8 @@ class QImageViewer(QMainWindow):
 
             return imageLabel, scrollArea, button
 
-        self.imageLeft, imageLeftScroll, imageLeftNextButton = createImage(imgCallback=self.getPosLeft, btnCallback=self._onClickLeft)
-        self.imageRight, imageRightScroll, imageRightNextButton = createImage(imgCallback=self.getPosRight, btnCallback=self._onClickRight)
+        self.imageLeft, imageLeftScroll, imageLeftNextButton = createImage(imgCallback=self._onImageClick, btnCallback=self._onClickLeft)
+        self.imageRight, imageRightScroll, imageRightNextButton = createImage(imgCallback=self._onImageClick, btnCallback=self._onClickRight)
         self.images = [self.imageLeft, self.imageRight]
         self.imageContexts = {
             self.imageLeft:
@@ -90,8 +109,6 @@ class QImageViewer(QMainWindow):
         self.resize(800, 600)
 
         self.flags = None
-        self.current_dir = None
-        self.video = None
         self.commands = []
         self.left_keypoints = []
         self.right_keypoints = []
@@ -146,54 +163,28 @@ class QImageViewer(QMainWindow):
         print("Furthest frames: ", *smallest_index)
         return smallest_index
 
-    def getPosRight(self , event):
+    def _onImageClick(self, image, event):
         # TODO resize point according to the current resizing of the image
         # TODO save point for triangulation
         x = event.pos().x()
         y = event.pos().y()
 
-        curr_w = self.imageLeft.size().width()
-        curr_h = self.imageLeft.size().height()
+        curr_w = image.size().width()
+        curr_h = image.size().height()
         
-        right_frame = self.video[self.left_frame_index]
-        scale_x = left_frame.shape[1] / curr_w
-        scale_y = left_frame.shape[0] / curr_h
-        
-        x = x * scale_x
-        y = y * scale_y
-        right_frame = cv2.circle(right_frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
-        
-        self.imageRight.setPixmap(QPixmap.fromImage(self._np2qt_image(right_frame)))
-        
-        print(f"[image 1] clicked at ({x}, {y})") 
-    
-    def getPosLeft(self , event):
-        # TOD0 resize point according to the current resizing of the image
-        # TODO save point for triangulation
-        x = event.pos().x()
-        y = event.pos().y()
-
-        curr_w = self.imageLeft.size().width()
-        curr_h = self.imageLeft.size().height()
-        
-        left_frame = self.video[self.left_frame_index]
-        scale_x = left_frame.shape[1] / curr_w
-        scale_y = left_frame.shape[0] / curr_h
+        frame = self.video[self.left_frame_index]
+        scale_x = frame.shape[1] / curr_w
+        scale_y = frame.shape[0] / curr_h
         
         x = x * scale_x
         y = y * scale_y
-        left_frame = cv2.circle(left_frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
-        self.imageLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
-
-        print(f"[image 2] clicked at ({x}, {y})") 
+        frame = cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
+        
+        self.imageRight.setPixmap(QPixmap.fromImage(self._np2qt_image(frame)))
+        
+        print(f"[image 1] clicked at ({x}, {y})")
     
-    @staticmethod
-    def _np2qt_image(img):
-        height, width, channel = img.shape
-        bytesPerLine = 3 * width
-        return QImage(img.data, width, height, bytesPerLine, QImage.Format_RGB888)
-    
-    def set_current(self, path):
+    def setCurrent(self, path):
         self.done = False
         self.left_keypoints = []
         self.right_keypoints = []
@@ -203,17 +194,14 @@ class QImageViewer(QMainWindow):
             self.hdf.close()
         self.hdf = h5py.File(os.path.join(path, 'data.hdf5'), 'r')
         self._load_camera_params()
-
-        self.current_dir = path
-        self.left_frame_index, self.right_frame_index = self._find_furthest()
-
-        self.video = video_io.vread(os.path.join(path, 'frames_preview.mp4'))
         print(self.hdf['camera_transform'].shape[0], "poses")
-        left_frame = self.video[self.left_frame_index]
-        right_frame = self.video[self.right_frame_index]
 
-        self.imageLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
-        self.imageRight.setPixmap(QPixmap.fromImage(self._np2qt_image(right_frame)))
+        video = video_io.vread(os.path.join(path, 'frames_preview.mp4'))
+        for image in self.images:
+            image.setVideo(video)
+
+        for image, frame in zip(self.images, self._find_furthest()):
+            image.setFrame(frame)
 
         #self.scrollArea.setVisible(True)
         self.printAct.setEnabled(True)
@@ -339,6 +327,6 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
     imageViewer = QImageViewer()
-    imageViewer.set_current(PATH)
+    imageViewer.setCurrent(PATH)
     imageViewer.show()
     sys.exit(app.exec_())
