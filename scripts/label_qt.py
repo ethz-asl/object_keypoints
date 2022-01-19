@@ -9,69 +9,82 @@ from skvideo import io as video_io
 import h5py
 import numpy as np
 from perception.utils import camera_utils
-from perception.constants import *
+#from perception.constants import *
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap, QPalette, QPainter
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QScrollArea, QMessageBox, QMainWindow, QMenu, QAction, \
-    qApp, QFileDialog, QHBoxLayout, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QWidget, QLabel, QSizePolicy, QScrollArea, QMessageBox, QMainWindow, QMenu, QAction, \
+    qApp, QFileDialog, QHBoxLayout, QPushButton, QVBoxLayout, QAbstractScrollArea
 
 
 # TODO change with flags
-PATH = "/media/giuseppe/My Passport/2021-12-10-11-35-45_valve_perception"
-CALIBRATION = "/media/giuseppe/My Passport/calibration/intrinsics.yaml"
+PATH = "/home/user/object_keypoints/2022-01-17-16-30-09_valve_perception"
+CALIBRATION = "/home/user/calibration/intrinsics.yaml"
 
 class QImageViewer(QMainWindow):
     def __init__(self):
         super().__init__()
 
         self.printer = QPrinter()
-        self.scaleFactor = 0.0
 
-        self.imageLabelLeft = QLabel()
-        self.imageLabelLeft.setBackgroundRole(QPalette.Base)
-        self.imageLabelLeft.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.imageLabelLeft.setScaledContents(True)
-        self.imageLabelLeft.mousePressEvent = self.getPosLeft
-
-        self.imageLeftNextButton = QPushButton('Next Left', self)
-        self.imageLeftNextButton.setToolTip('Move to the next frame on the left')
-        self.imageLeftNextButton.resize(400, 50)
-        self.imageLeftNextButton.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.imageLeftNextButton.clicked.connect(self._onClickLeft)
-
-        self.imageLabelRight = QLabel()
-        self.imageLabelRight.setBackgroundRole(QPalette.Base)
-        self.imageLabelRight.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.imageLabelRight.setScaledContents(True)
-        self.imageLabelRight.mousePressEvent = self.getPosRight
-
-        self.imageRightNextButton = QPushButton('Next Right', self)
-        self.imageRightNextButton.setToolTip('Move to the next frame on the right')
-        self.imageRightNextButton.resize(400, 50)
-        self.imageRightNextButton.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.imageRightNextButton.clicked.connect(self._onClickRight)
-        
         self.hlayout = QHBoxLayout()
-        self.hlayout.addWidget(self.imageLabelLeft)
-        self.hlayout.addWidget(self.imageLabelRight)
-
         self.hblayout = QHBoxLayout()
-        self.hblayout.addWidget(self.imageLeftNextButton)
-        self.hblayout.addWidget(self.imageRightNextButton)
 
-        self.vlayout = QVBoxLayout()
-        self.vlayout.addLayout(self.hlayout)
-        self.vlayout.addLayout(self.hblayout)
+        def createImage(imgCallback, btnCallback):
+            imageLabel = QLabel()
+            imageLabel.setBackgroundRole(QPalette.Base)
+            imageLabel.setScaledContents(True)
+            imageLabel.mousePressEvent = imgCallback
 
-        self.scrollArea = QScrollArea()
-        self.scrollArea.setBackgroundRole(QPalette.Dark)
-        self.scrollArea.setLayout(self.vlayout)
-        #self.scrollArea.setWidget(self.imageLabel1)
-        self.scrollArea.setVisible(False)
+            tst = QVBoxLayout()
+            tst.addWidget(imageLabel)
 
-        self.setCentralWidget(self.scrollArea)
+            class QCustomScrollArea(QScrollArea):
+                def wheelEvent(self2, event):
+                    if event.modifiers() == Qt.ControlModifier:
+                        event.accept()
+                        if event.angleDelta().y() > 0:
+                            self.zoomIn()
+                        else:
+                            self.zoomOut()
+                        return
+                    QScrollArea.wheelEvent(self2, event)
+
+            scrollArea = QCustomScrollArea()
+            scrollArea.horizontalScrollBar().valueChanged.connect(lambda value: self.syncScrollbars(scrollArea.horizontalScrollBar(), False, value))
+            scrollArea.verticalScrollBar().valueChanged.connect(lambda value: self.syncScrollbars(scrollArea.verticalScrollBar(), True, value))
+            scrollArea.setBackgroundRole(QPalette.Dark)
+            scrollArea.setWidget(imageLabel)
+            self.hlayout.addWidget(scrollArea)
+
+            button = QPushButton('Next', self)
+            button.setToolTip('Move to the next frame')
+            button.clicked.connect(btnCallback)
+            button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            self.hblayout.addWidget(button)
+
+            return imageLabel, scrollArea, button
+
+        self.imageLeft, imageLeftScroll, imageLeftNextButton = createImage(imgCallback=self.getPosLeft, btnCallback=self._onClickLeft)
+        self.imageRight, imageRightScroll, imageRightNextButton = createImage(imgCallback=self.getPosRight, btnCallback=self._onClickRight)
+        self.images = [self.imageLeft, self.imageRight]
+        self.imageContexts = {
+            self.imageLeft:
+                {'scroll': imageLeftScroll,
+                 'button': imageLeftNextButton},
+            self.imageRight:
+                {'scroll': imageRightScroll,
+                 'button': imageRightNextButton}
+        }
+
+        self.mainWidget = QWidget()
+        self.vlayout = QVBoxLayout(self.mainWidget)
+        self.vlayout.addLayout(self.hlayout, 3)
+        self.vlayout.addWidget(QLabel('Use CTRL+Scroll to zoom, Scroll to go vertical and ALT+Scroll to go horizontal'))
+        self.vlayout.addLayout(self.hblayout, 1)
+
+        self.setCentralWidget(self.mainWidget)
 
         self.createActions()
         self.createMenus()
@@ -91,13 +104,22 @@ class QImageViewer(QMainWindow):
         self.done = False
         self.camera = None
 
+    def showEvent(self, event):
+        self.zoomImage()
+        QMainWindow.showEvent(self, event)
+
+    def resizeEvent(self, event):
+        if self.fitToWindowAct.isChecked():
+            self.zoomImage()
+        QMainWindow.resizeEvent(self, event)
+
     def _load_camera_params(self):
         self.camera = camera_utils.from_calibration(CALIBRATION) #self.flags.calibration TODO(giuseppe) restore from flag
 
     def _onClickLeft(self):
         self.left_frame_index = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
         left_frame = self.video[self.left_frame_index]
-        self.imageLabelLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
+        self.imageLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
 
     def _onClickRight(self):
         self.right_frame_index = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
@@ -133,8 +155,8 @@ class QImageViewer(QMainWindow):
         x = event.pos().x()
         y = event.pos().y()
 
-        curr_w = self.imageLabelLeft.size().width()
-        curr_h = self.imageLabelLeft.size().height()
+        curr_w = self.imageLeft.size().width()
+        curr_h = self.imageLeft.size().height()
         
         right_frame = self.video[self.left_frame_index]
         scale_x = left_frame.shape[1] / curr_w
@@ -144,7 +166,7 @@ class QImageViewer(QMainWindow):
         y = y * scale_y
         right_frame = cv2.circle(right_frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
         
-        self.imageLabelRight.setPixmap(QPixmap.fromImage(self._np2qt_image(right_frame)))
+        self.imageRight.setPixmap(QPixmap.fromImage(self._np2qt_image(right_frame)))
         
         print(f"[image 1] clicked at ({x}, {y})") 
     
@@ -154,8 +176,8 @@ class QImageViewer(QMainWindow):
         x = event.pos().x()
         y = event.pos().y()
 
-        curr_w = self.imageLabelLeft.size().width()
-        curr_h = self.imageLabelLeft.size().height()
+        curr_w = self.imageLeft.size().width()
+        curr_h = self.imageLeft.size().height()
         
         left_frame = self.video[self.left_frame_index]
         scale_x = left_frame.shape[1] / curr_w
@@ -164,7 +186,7 @@ class QImageViewer(QMainWindow):
         x = x * scale_x
         y = y * scale_y
         left_frame = cv2.circle(left_frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
-        self.imageLabelLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
+        self.imageLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
 
         print(f"[image 2] clicked at ({x}, {y})") 
     
@@ -193,11 +215,10 @@ class QImageViewer(QMainWindow):
         left_frame = self.video[self.left_frame_index]
         right_frame = self.video[self.right_frame_index]
 
-        self.imageLabelLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
-        self.imageLabelRight.setPixmap(QPixmap.fromImage(self._np2qt_image(right_frame)))
-        self.scaleFactor = 1.0
+        self.imageLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
+        self.imageRight.setPixmap(QPixmap.fromImage(self._np2qt_image(right_frame)))
 
-        self.scrollArea.setVisible(True)
+        #self.scrollArea.setVisible(True)
         self.printAct.setEnabled(True)
         self.fitToWindowAct.setEnabled(True)
         self.updateActions()
@@ -218,21 +239,15 @@ class QImageViewer(QMainWindow):
                 QMessageBox.information(self, "Image Viewer", "Cannot load %s." % fileName)
                 return
 
-            self.imageLabelLeft.setPixmap(QPixmap.fromImage(image))
-            self.imageLabelRight.setPixmap(QPixmap.fromImage(image))
-            self.scaleFactor = 1.0
+            self.imageLeft.setPixmap(QPixmap.fromImage(image))
+            self.imageRight.setPixmap(QPixmap.fromImage(image))
 
             self.scrollArea.setVisible(True)
             self.printAct.setEnabled(True)
             self.fitToWindowAct.setEnabled(True)
             self.updateActions()
 
-            if not self.fitToWindowAct.isChecked():
-                self.imageLabelLeft.adjustSize()
-                self.imageLabelRight.adjustSize()
-                
-
-    def print_(self):
+    def print(self):
         dialog = QPrintDialog(self.printer, self)
         if dialog.exec_():
             painter = QPainter(self.printer)
@@ -243,23 +258,40 @@ class QImageViewer(QMainWindow):
             painter.setWindow(self.imageLabel1.pixmap().rect())
             painter.drawPixmap(0, 0, self.imageLabel1.pixmap())
 
+    def syncScrollbars(self, sender, vertical, value):
+        for context in self.imageContexts.values():
+            if vertical:
+                bar = context['scroll'].verticalScrollBar()
+            else:
+                bar = context['scroll'].horizontalScrollBar()
+            if bar != sender:
+                bar.setValue(value)
+
+    def zoomImage(self, factor=0):
+        if factor == 0 or self.fitToWindowAct.isChecked():
+            for image, context in self.imageContexts.items():
+                image.resize(context['scroll'].viewport().size())
+            return
+
+        newSize = factor * self.images[0].size()
+        for image in self.images:
+            image.resize(newSize)
+        #self.adjustScrollBar(self.scrollArea.horizontalScrollBar(), factor)
+        #self.adjustScrollBar(self.scrollArea.verticalScrollBar(), factor)
+
+        #self.zoomInAct.setEnabled(self.scaleFactor < 3.0)
+        #self.zoomOutAct.setEnabled(self.scaleFactor > 0.333)
+
     def zoomIn(self):
-        self.scaleImage(1.25)
+        self.zoomImage(1.25)
 
     def zoomOut(self):
-        self.scaleImage(0.8)
-
-    def normalSize(self):
-        self.imageLabelLeft.adjustSize()
-        self.imageLabelRight.adjustSize()
-        self.scaleFactor = 1.0
+        self.zoomImage(0.8)
 
     def fitToWindow(self):
         fitToWindow = self.fitToWindowAct.isChecked()
-        self.scrollArea.setWidgetResizable(fitToWindow)
-        if not fitToWindow:
-            self.normalSize()
-
+        if fitToWindow:
+            self.zoomImage()
         self.updateActions()
 
     def about(self):
@@ -280,11 +312,11 @@ class QImageViewer(QMainWindow):
 
     def createActions(self):
         self.openAct = QAction("&Open...", self, shortcut="Ctrl+O", triggered=self.open)
-        self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print_)
+        self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print)
         self.exitAct = QAction("E&xit", self, shortcut="Ctrl+Q", triggered=self.close)
         self.zoomInAct = QAction("Zoom &In (25%)", self, shortcut="Ctrl++", enabled=False, triggered=self.zoomIn)
         self.zoomOutAct = QAction("Zoom &Out (25%)", self, shortcut="Ctrl+-", enabled=False, triggered=self.zoomOut)
-        self.normalSizeAct = QAction("&Normal Size", self, shortcut="Ctrl+S", enabled=False, triggered=self.normalSize)
+        self.normalSizeAct = QAction("&Normal Size", self, shortcut="Ctrl+S", enabled=False, triggered=self.zoomImage)
         self.fitToWindowAct = QAction("&Fit to Window", self, enabled=False, checkable=True, shortcut="Ctrl+F",
                                       triggered=self.fitToWindow)
         self.aboutAct = QAction("&About", self, triggered=self.about)
@@ -317,16 +349,6 @@ class QImageViewer(QMainWindow):
         self.zoomOutAct.setEnabled(not self.fitToWindowAct.isChecked())
         self.normalSizeAct.setEnabled(not self.fitToWindowAct.isChecked())
 
-    def scaleImage(self, factor):
-        self.scaleFactor *= factor
-        self.imageLabel1.resize(self.scaleFactor * self.imageLabel1.pixmap().size())
-
-        self.adjustScrollBar(self.scrollArea.horizontalScrollBar(), factor)
-        self.adjustScrollBar(self.scrollArea.verticalScrollBar(), factor)
-
-        self.zoomInAct.setEnabled(self.scaleFactor < 3.0)
-        self.zoomOutAct.setEnabled(self.scaleFactor > 0.333)
-
     def adjustScrollBar(self, scrollBar, factor):
         scrollBar.setValue(int(factor * scrollBar.value()
                                + ((factor - 1) * scrollBar.pageStep() / 2)))
@@ -334,7 +356,10 @@ class QImageViewer(QMainWindow):
 
 if __name__ == '__main__':
     import sys
+    import signal
     from PyQt5.QtWidgets import QApplication
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     app = QApplication(sys.argv)
     imageViewer = QImageViewer()
