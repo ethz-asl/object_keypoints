@@ -28,6 +28,17 @@ class HeatmapHead(nn.Module):
     def forward(self, heatmaps):
         return self.output_head1(heatmaps[0]), self.output_head2(heatmaps[1])
 
+class DepthHead(nn.Module):
+    def __init__(self, features, heatmaps):
+        super().__init__()
+        self.output_head1 = prediction_module(features, heatmaps)
+        self.output_head2 = prediction_module(features, heatmaps)
+
+    def forward(self, x):
+        out1 = self.output_head1(x[0])
+        out2 = self.output_head2(x[1])
+        return out1, out2
+
 class CenterHead(nn.Module):
     def __init__(self, features, heatmaps):
         super().__init__()
@@ -51,6 +62,7 @@ class KeypointNet(nn.Module):
         super().__init__()
         self.backbone = self._build_hourglass()
         self.heatmap_head = HeatmapHead(features, heatmaps_out)
+        self.depth_head = DepthHead(features, heatmaps_out)
         self.center_head = CenterHead(features, heatmaps_out)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -68,6 +80,7 @@ class KeypointNet(nn.Module):
     def forward(self, x):
         features = [self.dropout(f) for f in self.backbone(x)]
         heatmaps_out = self.heatmap_head(features)
+        depth_out = self.depth_head(features)
         centers_out = self.center_head(features)
-        return heatmaps_out, centers_out
+        return heatmaps_out, depth_out, centers_out
 

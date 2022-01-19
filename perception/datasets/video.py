@@ -55,9 +55,7 @@ def _set_keypoints(heatmap, indices, length_scale=default_length_scale):
 RGB_MEAN = np.array([0.40789654, 0.44719302, 0.47026115], dtype=np.float32)
 RGB_STD = np.array([0.28863828, 0.27408164, 0.27809835], dtype=np.float32)
 
-class StereoVideoDataset(IterableDataset):
-    LEFT = 0
-    RIGHT = 1
+class SceneDataset(IterableDataset):
     kernel_size = 50
     kernel_center = 25
     kernel = _compute_kernel(kernel_size, kernel_center)
@@ -70,11 +68,9 @@ class StereoVideoDataset(IterableDataset):
     # Offset x, y start point of cropped image.
     image_offset = np.array([(height_resized / height * width - 511.0) / 2.0, 0.0])
 
-    def __init__(self, base_dir, keypoint_config, augment=False, augment_color=False, camera=None,
-            include_pose=False):
+    def __init__(self, base_dir, keypoint_config, augment=False, augment_color=False, include_pose=False):
         self.base_dir = os.path.expanduser(base_dir)
         self.metadata_path = os.path.join(self.base_dir, "data.hdf5")
-        self.camera = camera
         self.augment = augment
         self.keypoint_config = [1] + keypoint_config['keypoint_config']
         self._init_points()
@@ -87,9 +83,11 @@ class StereoVideoDataset(IterableDataset):
         targets = {'image': 'image', 'keypoints': 'keypoints'}
         augmentations = []
         if augment:
-            augmentations += [A.RandomResizedCrop(height=self.image_size[0], width=self.image_size[1], scale=(0.7, 1.0), ratio=(1.0, 1.0)),
-                    A.RandomBrightnessContrast(p=0.5),
-                    A.RandomGamma(p=0.5),
+            augmentations += [A.SmallestMaxSize(max_size=max(self.image_size)),
+                    A.CenterCrop(height=self.image_size[0], width=self.image_size[1]),
+                    A.RandomBrightnessContrast(p=1.0),
+                    A.RandomGamma(p=1.0),
+                    A.CLAHE(p=0.1),
                     A.Cutout(max_h_size=25, max_w_size=25, p=0.5),
                     A.HorizontalFlip(p=0.5),
                     A.VerticalFlip(p=0.5)]
@@ -97,36 +95,19 @@ class StereoVideoDataset(IterableDataset):
             augmentations += [A.SmallestMaxSize(max_size=max(self.image_size[0], self.image_size[1])),
                 A.CenterCrop(height=self.image_size[0], width=self.image_size[1])]
 
-        # if augment_color:
-        #     augmentations += [A.RandomBrightnessContrast(p=0.25),
-        #             A.ColorJitter(p=0.5),
-        #             A.GaussNoise(p=0.25)]
-
         self.augmentations = A.Compose(augmentations, additional_targets=targets, keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, check_each_transform=False))
         self.mean = RGB_MEAN
         self.std = RGB_STD
 
         with h5py.File(self.metadata_path, 'r') as f:
-            if self.camera == self.LEFT:
-                self.poses = f['left/camera_transform'][:]
-            elif self.camera == self.RIGHT:
-                self.poses = f['right/camera_transform'][:]
-            else:
-                raise ValueError("Camera needs to be 0 or 1.")
+            self.poses = f['camera_transform'][:]
 
     def __len__(self):
         return self.poses.shape[0]
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
-        calibration = camera_utils.load_calibration_params(calibration_file)
-
-        if self.camera == self.LEFT:
-            self.K = calibration['K']
-            self.D = calibration['D']
-        elif self.camera == self.RIGHT:
-            self.K = calibration['Kp']
-            self.D = calibration['Dp']
+        self.camera = camera_utils.from_calibration(calibration_file)
 
     def _init_points(self):
         filepath = os.path.join(self.base_dir, 'keypoints.json')
@@ -192,7 +173,7 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
             target[y_start:y_end, x_start:x_end] += cls.kernel[y_range_start:y_range_end, x_range_start:x_range_end]
 
     def __iter__(self):
-        video_file = 'left.mp4' if self.camera == self.LEFT else 'right.mp4'
+        video_file = 'frames.mp4'
         video_file = os.path.join(self.base_dir, video_file)
         video = video_io.vreader(video_file)
         try:
@@ -204,12 +185,9 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
     def _extract_example(self, T_WC, frame):
         T_CW = linalg.inv_transform(T_WC)
 
-        p_WK = self.world_points[:, :, None]
+        p_WK = self.world_points[:, :3]
 
-        R, _ = cv2.Rodrigues(T_CW[:3, :3])
-
-        projected, _ = cv2.fisheye.projectPoints(self.world_points[:, None, :3], R, T_CW[:3, 3], self.K, self.D)
-        projected = projected[:, 0, :]
+        projected = self.camera.project(p_WK, T_CW)
 
         out = self.augmentations(image=frame, keypoints=projected)
 
@@ -227,6 +205,7 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
                 _set_keypoints(target[i], points[start:end])
 
         centers = self._compute_centers(keypoints)
+        depth = self._compute_depth(keypoints, linalg.transform_points(T_CW, self.world_points))
 
         heatmap_max = np.maximum(target.max(axis=2).max(axis=1), 0.5)
         target = np.clip(target / heatmap_max[:, None, None], 0.0, 1.0)
@@ -236,12 +215,12 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
         frame = torch.tensor((out['image'].astype(np.float32).transpose([2, 0, 1]) / 255.0 - self.mean[:, None, None]) / self.std[:, None, None])
 
         if not self.include_pose:
-            return frame, target, centers
+            return frame, target, depth, centers
         else:
             keypoints_out = np.zeros((self.n_keypoints * 4, 2))
             keypoints_out[:keypoints.shape[0], :] = keypoints
             keypoints_out = keypoints_out.reshape(4, self.n_keypoints, 2) * scaling_factor
-            return frame, target, centers, T_WC, keypoints_out
+            return frame, target, depth, centers, T_WC, keypoints_out
 
     def _compute_centers(self, projected_keypoints):
         scaling_factor = float(self.target_size[0] / self.image_size[0])
@@ -261,6 +240,27 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
                     center_map[i][:, within_range] = center_vectors[:, within_range]
                     keypoint_index += 1
         return center_map
+
+    def _compute_depth(self, projected_keypoints, points_C):
+        scaling_factor = float(self.target_size[0] / self.image_size[0])
+        projected_keypoints = projected_keypoints * scaling_factor
+        depth_map = np.zeros((self.keypoint_maps, *self.target_size), dtype=np.float32)
+
+        keypoints = projected_keypoints.reshape(self.n_objects, self.n_keypoints, 2)
+        points_3d = points_C.reshape(self.n_objects, self.n_keypoints, 3)
+
+        for object_index in range(self.n_objects):
+            keypoint_index = 0
+            for i, points_in_map in enumerate(self.keypoint_config):
+                for _ in range(points_in_map):
+                    p_C = points_3d[object_index, keypoint_index]
+                    current_keypoint = keypoints[object_index, keypoint_index]
+                    distance_to_keypoint = np.linalg.norm(current_keypoint[:, None, None] - self.target_pixel_indices, axis=0)
+                    within_range = distance_to_keypoint < center_radius
+                    depth_map[i][within_range] = p_C[2]
+                    keypoint_index += 1
+
+        return depth_map
 
     @staticmethod
     def to_image(image):

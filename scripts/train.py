@@ -10,7 +10,7 @@ from perception.models import nms
 import albumentations as A
 from torch.utils.data import DataLoader
 from perception.loss import KeypointLoss
-from perception.datasets.video import StereoVideoDataset
+from perception.datasets.video import SceneDataset
 from perception.models import KeypointNet
 import pytorch_lightning as pl
 
@@ -59,30 +59,34 @@ class KeypointModule(pl.LightningModule):
         return self.model(frame, *args, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        frame, target, gt_centers = batch
-        heatmaps, p_centers = self(frame)
+        frame, target, depth, gt_centers = batch
+        heatmaps, p_depth, p_centers = self(frame)
 
-        loss, heatmap_losses, center_losses = self.loss(heatmaps, target, p_centers, gt_centers)
+        loss, heatmap_losses, depth_losses, center_losses = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
 
         self.log('train_loss', loss)
         self.log('heatmap_loss1', heatmap_losses[0])
         self.log('heatmap_loss2', heatmap_losses[1])
+        self.log('depth_loss1', depth_losses[0])
+        self.log('depth_loss2', depth_losses[1])
         self.log('center_loss1', center_losses[0])
         self.log('center_loss2', center_losses[1])
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        frame, target, gt_centers, _, keypoints = batch
-        heatmaps, p_centers = self(frame)
+        frame, target, depth, gt_centers, _, keypoints = batch
+        heatmaps, p_depth, p_centers = self(frame)
 
         loss = self._validation_loss(heatmaps, target, keypoints)
-        val_loss, heatmap_losses, center_losses = self.loss(heatmaps, target, p_centers, gt_centers)
+        val_loss, heatmap_losses, depth_losses, center_losses = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
 
         self.log('val_loss', loss)
         self.log('total_heatmap_loss', val_loss)
         self.log('val_heatmap_loss1', heatmap_losses[0])
         self.log('val_heatmap_loss2', heatmap_losses[1])
+        self.log('val_depth_loss1', depth_losses[0])
+        self.log('val_depth_loss2', depth_losses[1])
         self.log('val_center_loss1', center_losses[0])
         self.log('val_center_loss2', center_losses[1])
 
@@ -108,7 +112,7 @@ class KeypointModule(pl.LightningModule):
 def _build_datasets(sequences, **kwargs):
     datasets = []
     for sequence in sequences:
-        dataset = StereoVideoDataset(sequence, **kwargs)
+        dataset = SceneDataset(sequence, **kwargs)
         datasets.append(dataset)
     return datasets
 
@@ -128,10 +132,8 @@ class DataModule(pl.LightningDataModule):
     def setup(self, stage):
         if stage == 'fit':
             train_datasets = []
-            for camera in [0, 1]:
-                train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=True, augment_color=True, camera=camera)
-            val_datasets = (_build_datasets(self.val_sequences, camera=0, keypoint_config=self.keypoint_config, augment=False, include_pose=True) +
-                    _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, camera=1, include_pose=True))
+            train_datasets += _build_datasets(self.train_sequences, keypoint_config=self.keypoint_config, augment=True, augment_color=True)
+            val_datasets = _build_datasets(self.val_sequences, keypoint_config=self.keypoint_config, augment=False, include_pose=True)
             train = torch.utils.data.ChainDataset(train_datasets)
             self.train = torch.utils.data.BufferedShuffleDataset(train, self.flags.pool)
             self.val = torch.utils.data.ChainDataset(val_datasets)

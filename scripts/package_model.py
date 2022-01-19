@@ -24,9 +24,8 @@ class Model(torch.nn.Module):
         self.model = KeypointModule.load_from_checkpoint(flags.model, **hparams).model
 
     def forward(self, x):
-        heatmap, centers = self.model(x)
-        N, D, two, H, W = centers[-1].shape
-        return torch.sigmoid(heatmap[-1]), centers[-1]
+        heatmap, depth, centers = self.model(x)
+        return torch.sigmoid(heatmap[-1]), depth[-1], centers[-1]
 
 def main():
     flags = read_args()
