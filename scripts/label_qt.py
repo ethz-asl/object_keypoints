@@ -28,6 +28,7 @@ class Keypoint:
     x: float
     y: float
     frameId: int
+    worldPoint: any
 
 
 class QCustomImage(QLabel):
@@ -149,10 +150,7 @@ class QImageViewer(QMainWindow):
         self.fitToWindowAct.setEnabled(True)
         self.updateActions()
 
-        # TODO Need to add this back
-        # keypoint_path = os.path.join(path, KEYPOINT_FILENAME)
-        # if os.path.exists(keypoint_path):
-        #     self._load_points(keypoint_path)
+        self._load()
 
     def showEvent(self, event):
         self.zoomImages()
@@ -167,6 +165,10 @@ class QImageViewer(QMainWindow):
         frameId = random.randint(0, self.hdf['camera_transform'].shape[0]-1) if rnd else \
             (image.getFrameId() + 1) % self.hdf['camera_transform'].shape[0]
         image.setFrameId(frameId)
+
+    def updateImages(self):
+        for image in self.images:
+            image.updateImage()
 
     def _onImageClick(self, image, id, event):
         if len(self._keypoints) % len(self.images) != id:
@@ -186,14 +188,13 @@ class QImageViewer(QMainWindow):
         x = x * scale_x
         y = y * scale_y
 
-        self._keypoints.append(Keypoint(x, y, image.getFrameId()))
+        self._keypoints.append(Keypoint(x, y, image.getFrameId(), None))
 
         cv2.circle(frame, (int(x), int(y)), radius=3, color=(0, 0, 255), thickness=2)
 
         self.compute_all()
 
-        for image in self.images:
-            image.updateImage()
+        self.updateImages()
 
         print(f"[image] clicked at ({x}, {y})")
 
@@ -234,16 +235,31 @@ class QImageViewer(QMainWindow):
         if len(self._keypoints) % len(self.images) != 0:
             return
 
-        self.worldPoints = []
         print('Triangulating')
-        for pointLeft, pointRight in zip(self._keypoints[::len(self.images)], self._keypoints[1::len(self.images)]):
+        for pointLeft, pointRight in zip(self._keypoints[::len(self.images)],
+                                         self._keypoints[1::len(self.images)]):
+            # Only compute points which have not been computed yet
+            if pointLeft.worldPoint is not None:
+                continue
             worldPoint = self._triangulate(pointLeft, pointRight)
+            pointLeft.worldPoint = worldPoint
+            pointRight.worldPoint = worldPoint
             self.worldPoints.append(worldPoint)
-
-        # It is sufficient to backproject the most recently added point
-        self._backproject(worldPoint)
+            self._backproject(worldPoint)
 
         self._save()
+
+    def _load(self):
+        if not os.path.exists(self.out_file):
+            return
+
+        with open(self.out_file, 'rt') as f:
+            points = json.loads(f.read())
+            self.worldPoints = [np.array(x).reshape(4, 1) for x in points['3d_points']]
+            for worldPoint in self.worldPoints:
+                self._backproject(worldPoint)
+
+        self.updateImages()
 
     def _save(self):
         """Writes keypoints to file as json. """
