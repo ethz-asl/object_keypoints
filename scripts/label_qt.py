@@ -23,11 +23,13 @@ PATH = "/home/user/object_keypoints/2022-01-17-16-30-09_valve_perception"
 CALIBRATION = "/home/user/calibration/intrinsics.yaml"
 
 class QCustomImage(QLabel):
-    def __init__(self):
+    def __init__(self, scrollArea, button):
         QLabel.__init__(self)
         self.setBackgroundRole(QPalette.Base)
         self.setScaledContents(True)
         self.mousePressEvent = self._onImageClick
+        self.scrollArea = scrollArea
+        self.button = button
         self._frameId = None
         self._video = None
 
@@ -51,7 +53,7 @@ class QCustomImage(QLabel):
         curr_w = self.size().width()
         curr_h = self.size().height()
 
-        frame = self.video[self._frameId]
+        frame = self._video[self._frameId]
         scale_x = frame.shape[1] / curr_w
         scale_y = frame.shape[0] / curr_h
 
@@ -77,9 +79,7 @@ class QImageViewer(QMainWindow):
         self.hlayout = QHBoxLayout()
         self.hblayout = QHBoxLayout()
 
-        def createImage(btnCallback):
-            imageLabel = QCustomImage()
-
+        def createSingleView():
             class QCustomScrollArea(QScrollArea):
                 def wheelEvent(self2, event):
                     if event.modifiers() == Qt.ControlModifier:
@@ -95,28 +95,23 @@ class QImageViewer(QMainWindow):
             scrollArea.horizontalScrollBar().valueChanged.connect(lambda value: self.syncScrollbars(scrollArea.horizontalScrollBar(), False, value))
             scrollArea.verticalScrollBar().valueChanged.connect(lambda value: self.syncScrollbars(scrollArea.verticalScrollBar(), True, value))
             scrollArea.setBackgroundRole(QPalette.Dark)
-            scrollArea.setWidget(imageLabel)
-            self.hlayout.addWidget(scrollArea)
 
             button = QPushButton('Next', self)
             button.setToolTip('Move to the next frame')
-            button.clicked.connect(btnCallback)
+            button.clicked.connect(lambda: self._onNextClick(imageLabel))
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
+            imageLabel = QCustomImage(scrollArea=scrollArea, button=button)
+
+            scrollArea.setWidget(imageLabel)
+            self.hlayout.addWidget(scrollArea)
             self.hblayout.addWidget(button)
 
             return imageLabel, scrollArea, button
 
-        self.imageLeft, imageLeftScroll, imageLeftNextButton = createImage(btnCallback=self._onClickLeft)
-        self.imageRight, imageRightScroll, imageRightNextButton = createImage(btnCallback=self._onClickRight)
+        self.imageLeft, imageLeftScroll, imageLeftNextButton = createSingleView()
+        self.imageRight, imageRightScroll, imageRightNextButton = createSingleView()
         self.images = [self.imageLeft, self.imageRight]
-        self.imageContexts = {
-            self.imageLeft:
-                {'scroll': imageLeftScroll,
-                 'button': imageLeftNextButton},
-            self.imageRight:
-                {'scroll': imageRightScroll,
-                 'button': imageRightNextButton}
-        }
 
         self.mainWidget = QWidget()
         self.vlayout = QVBoxLayout(self.mainWidget)
@@ -154,15 +149,9 @@ class QImageViewer(QMainWindow):
     def _load_camera_params(self):
         self.camera = camera_utils.from_calibration(CALIBRATION) #self.flags.calibration TODO(giuseppe) restore from flag
 
-    def _onClickLeft(self):
-        self.left_frame_index = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
-        left_frame = self.video[self.left_frame_index]
-        self.imageLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(left_frame)))
-
-    def _onClickRight(self):
-        self.right_frame_index = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
-        right_frame = self.video[self.right_frame_index]
-        self.rightLabelLeft.setPixmap(QPixmap.fromImage(self._np2qt_image(right_frame)))
+    def _onNextClick(self, image):
+        frame = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
+        image.setFrame(frame)
 
     def _find_furthest(self):
         video_length = self.hdf['camera_transform'].shape[0]
@@ -227,18 +216,18 @@ class QImageViewer(QMainWindow):
             painter.drawPixmap(0, 0, self.imageLabel1.pixmap())
 
     def syncScrollbars(self, sender, vertical, value):
-        for context in self.imageContexts.values():
+        for image in self.images:
             if vertical:
-                bar = context['scroll'].verticalScrollBar()
+                bar = image.scrollArea.verticalScrollBar()
             else:
-                bar = context['scroll'].horizontalScrollBar()
+                bar = image.scrollArea.horizontalScrollBar()
             if bar != sender:
                 bar.setValue(value)
 
     def zoomImage(self, factor=0):
         if factor == 0 or self.fitToWindowAct.isChecked():
-            for image, context in self.imageContexts.items():
-                image.resize(context['scroll'].viewport().size())
+            for image in self.images:
+                image.resize(image.scrollArea.viewport().size())
             return
 
         newSize = factor * self.images[0].size()
