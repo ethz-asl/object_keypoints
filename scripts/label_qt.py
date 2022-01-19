@@ -32,14 +32,22 @@ class QCustomImage(QLabel):
         self.button = button
         self._frameId = None
         self._video = None
+        self._keypoints = []
 
     def setVideo(self, video):
         self._video = video
 
-    def setFrame(self, id):
+    def setFrameId(self, id):
         assert self._video is not None
+        self._keypoints = []
         self._frameId = id
         self._updateImage(self._video[id])
+
+    def getFrame(self):
+        return self._video[self._frameId]
+
+    def getKeypoints(self):
+        return self._keypoints
 
     def _updateImage(self, frame):
         self.setPixmap(QPixmap.fromImage(self._np2qt_image(frame)))
@@ -53,12 +61,15 @@ class QCustomImage(QLabel):
         curr_w = self.size().width()
         curr_h = self.size().height()
 
-        frame = self._video[self._frameId]
+        frame = self.getFrame()
         scale_x = frame.shape[1] / curr_w
         scale_y = frame.shape[0] / curr_h
 
         x = x * scale_x
         y = y * scale_y
+
+        self._keypoints.append((x, y))
+
         frame = cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
         self._updateImage(frame)
 
@@ -107,10 +118,10 @@ class QImageViewer(QMainWindow):
             self.hlayout.addWidget(scrollArea)
             self.hblayout.addWidget(button)
 
-            return imageLabel, scrollArea, button
+            return imageLabel
 
-        self.imageLeft, imageLeftScroll, imageLeftNextButton = createSingleView()
-        self.imageRight, imageRightScroll, imageRightNextButton = createSingleView()
+        self.imageLeft = createSingleView()
+        self.imageRight = createSingleView()
         self.images = [self.imageLeft, self.imageRight]
 
         self.mainWidget = QWidget()
@@ -124,13 +135,11 @@ class QImageViewer(QMainWindow):
         self.createActions()
         self.createMenus()
         
-        self.setWindowTitle("Image Viewer")
+        self.setWindowTitle("Image Labeler Plus")
         self.resize(800, 600)
 
         self.flags = None
         self.commands = []
-        self.left_keypoints = []
-        self.right_keypoints = []
         self.world_points = []
         self.alpha = 1.0
         self.hdf = None
@@ -138,20 +147,20 @@ class QImageViewer(QMainWindow):
         self.camera = None
 
     def showEvent(self, event):
-        self.zoomImage()
+        self.zoomImages()
         QMainWindow.showEvent(self, event)
 
     def resizeEvent(self, event):
         if self.fitToWindowAct.isChecked():
-            self.zoomImage()
+            self.zoomImages()
         QMainWindow.resizeEvent(self, event)
 
     def _load_camera_params(self):
         self.camera = camera_utils.from_calibration(CALIBRATION) #self.flags.calibration TODO(giuseppe) restore from flag
 
     def _onNextClick(self, image):
-        frame = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
-        image.setFrame(frame)
+        frameId = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
+        image.setFrameId(frameId)
 
     def _find_furthest(self):
         video_length = self.hdf['camera_transform'].shape[0]
@@ -176,10 +185,8 @@ class QImageViewer(QMainWindow):
         print("Furthest frames: ", *smallest_index)
         return smallest_index
     
-    def setCurrent(self, path):
+    def setCurrentData(self, path):
         self.done = False
-        self.left_keypoints = []
-        self.right_keypoints = []
         self.world_points = []
         
         if self.hdf is not None:
@@ -192,8 +199,8 @@ class QImageViewer(QMainWindow):
         for image in self.images:
             image.setVideo(video)
 
-        for image, frame in zip(self.images, self._find_furthest()):
-            image.setFrame(frame)
+        for image, frameId in zip(self.images, self._find_furthest()):
+            image.setFrameId(frameId)
 
         self.printAct.setEnabled(True)
         self.fitToWindowAct.setEnabled(True)
@@ -224,10 +231,12 @@ class QImageViewer(QMainWindow):
             if bar != sender:
                 bar.setValue(value)
 
-    def zoomImage(self, factor=0):
+    def zoomImages(self, factor=0):
         if factor == 0 or self.fitToWindowAct.isChecked():
             for image in self.images:
-                image.resize(image.scrollArea.viewport().size())
+                w = image.scrollArea.viewport().size().width()
+                h = image.getFrame().shape[0] / image.getFrame().shape[1] * w
+                image.resize(w, h)
             return
 
         newSize = factor * self.images[0].size()
@@ -240,15 +249,15 @@ class QImageViewer(QMainWindow):
         #self.zoomOutAct.setEnabled(self.scaleFactor > 0.333)
 
     def zoomIn(self):
-        self.zoomImage(1.25)
+        self.zoomImages(1.25)
 
     def zoomOut(self):
-        self.zoomImage(0.8)
+        self.zoomImages(0.8)
 
     def fitToWindow(self):
         fitToWindow = self.fitToWindowAct.isChecked()
         if fitToWindow:
-            self.zoomImage()
+            self.zoomImages()
         self.updateActions()
 
     def about(self):
@@ -270,9 +279,11 @@ class QImageViewer(QMainWindow):
     def createActions(self):
         self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print)
         self.exitAct = QAction("E&xit", self, shortcut="Ctrl+Q", triggered=self.close)
+        self.nextLeft = QAction("Next &Left", self, shortcut="q", triggered=lambda: self._onNextClick(self.imageLeft))
+        self.nextRight = QAction("Next &Right", self, shortcut="w", triggered=lambda: self._onNextClick(self.imageRight))
         self.zoomInAct = QAction("Zoom &In", self, shortcut="+", enabled=False, triggered=self.zoomIn)
         self.zoomOutAct = QAction("Zoom &Out", self, shortcut="-", enabled=False, triggered=self.zoomOut)
-        self.normalSizeAct = QAction("&Normal Size", self, shortcut="0", enabled=False, triggered=self.zoomImage)
+        self.normalSizeAct = QAction("&Normal Size", self, shortcut="0", enabled=False, triggered=self.zoomImages)
         self.fitToWindowAct = QAction("&Fit to Window", self, enabled=False, checkable=True, shortcut="Ctrl+F",
                                       triggered=self.fitToWindow)
         self.aboutAct = QAction("&About", self, triggered=self.about)
@@ -283,6 +294,10 @@ class QImageViewer(QMainWindow):
         self.fileMenu.addAction(self.printAct)
         self.fileMenu.addSeparator()
         self.fileMenu.addAction(self.exitAct)
+
+        self.labelingMenu = QMenu("&Labeling", self)
+        self.labelingMenu.addAction(self.nextLeft)
+        self.labelingMenu.addAction(self.nextRight)
 
         self.viewMenu = QMenu("&View", self)
         self.viewMenu.addAction(self.zoomInAct)
@@ -296,6 +311,7 @@ class QImageViewer(QMainWindow):
         self.helpMenu.addAction(self.aboutQtAct)
 
         self.menuBar().addMenu(self.fileMenu)
+        self.menuBar().addMenu(self.labelingMenu)
         self.menuBar().addMenu(self.viewMenu)
         self.menuBar().addMenu(self.helpMenu)
 
@@ -318,6 +334,6 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
     imageViewer = QImageViewer()
-    imageViewer.setCurrent(PATH)
+    imageViewer.setCurrentData(PATH)
     imageViewer.show()
     sys.exit(app.exec_())
