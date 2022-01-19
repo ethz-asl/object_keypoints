@@ -3,13 +3,15 @@
 
 import os
 import argparse
+import json
 import cv2
 from turtle import right
 import random
 from skvideo import io as video_io
 import h5py
+from dataclasses import dataclass
 import numpy as np
-from perception.utils import camera_utils
+from perception.utils import camera_utils, linalg
 #from perception.constants import *
 
 from PyQt5.QtCore import Qt
@@ -19,65 +21,38 @@ from PyQt5.QtWidgets import QWidget, QLabel, QSizePolicy, QScrollArea, QMessageB
     qApp, QFileDialog, QHBoxLayout, QPushButton, QVBoxLayout, QAbstractScrollArea
 
 
-# TODO change with flags
-CALIBRATION = "/home/user/calibration/intrinsics.yaml"
+@dataclass
+class Keypoint:
+    x: float
+    y: float
+    frameId: int
 
 class QCustomImage(QLabel):
     def __init__(self, scrollArea, button):
         QLabel.__init__(self)
         self.setBackgroundRole(QPalette.Base)
         self.setScaledContents(True)
-        self.mousePressEvent = self._onImageClick
-        self.mouseClickEvent = None
         self.scrollArea = scrollArea
         self.button = button
         self._frameId = None
         self._video = None
-        self._keypoints = []
 
     def setVideo(self, video):
         self._video = video
 
     def setFrameId(self, id):
         assert self._video is not None
-        self._keypoints = []
         self._frameId = id
-        self._updateImage()
+        self.updateImage()
+
+    def getFrameId(self):
+        return self._frameId
 
     def getFrame(self):
         return self._video[self._frameId]
 
-    def getKeypoints(self):
-        return self._keypoints
-
-    def _updateImage(self):
+    def updateImage(self):
         self.setPixmap(QPixmap.fromImage(self._np2qt_image(self._video[self._frameId])))
-
-    def _onImageClick(self, event):
-        # TODO resize point according to the current resizing of the image
-        # TODO save point for triangulation
-        x = event.pos().x()
-        y = event.pos().y()
-
-        curr_w = self.size().width()
-        curr_h = self.size().height()
-
-        frame = self.getFrame()
-        scale_x = frame.shape[1] / curr_w
-        scale_y = frame.shape[0] / curr_h
-
-        x = x * scale_x
-        y = y * scale_y
-
-        self._keypoints.append((x, y))
-
-        cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
-        self._updateImage()
-
-        print(f"[image] clicked at ({x}, {y})")
-
-        if self.mouseClickEvent is not None:
-            self.mouseClickEvent()
 
     @staticmethod
     def _np2qt_image(img):
@@ -89,12 +64,14 @@ class QImageViewer(QMainWindow):
     def __init__(self, flags):
         super().__init__()
 
+        self._keypoints: Keypoint = []
+
         self.printer = QPrinter()
 
         self.hlayout = QHBoxLayout()
         self.hblayout = QHBoxLayout()
 
-        def createSingleView():
+        def createSingleView(id):
             class QCustomScrollArea(QScrollArea):
                 def wheelEvent(self2, event):
                     if event.modifiers() == Qt.ControlModifier:
@@ -117,7 +94,7 @@ class QImageViewer(QMainWindow):
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
             image = QCustomImage(scrollArea=scrollArea, button=button)
-            image.mouseClickEvent = self.triangulate
+            image.mousePressEvent = lambda event: self._onImageClick(image, id, event)
 
             scrollArea.setWidget(image)
             self.hlayout.addWidget(scrollArea)
@@ -125,14 +102,14 @@ class QImageViewer(QMainWindow):
 
             return image
 
-        self.imageLeft = createSingleView()
-        self.imageRight = createSingleView()
+        self.imageLeft = createSingleView(0)
+        self.imageRight = createSingleView(1)
         self.images = [self.imageLeft, self.imageRight]
 
         self.mainWidget = QWidget()
         self.vlayout = QVBoxLayout(self.mainWidget)
         self.vlayout.addLayout(self.hlayout, 3)
-        self.vlayout.addWidget(QLabel('Use CTRL+Scroll to zoom, Scroll to go vertical and ALT+Scroll to go horizontal'))
+        self.vlayout.addWidget(QLabel('Use CTRL+Scroll to zoom, Scroll to go vertical and ALT+Scroll to go horizontal.\nClick on point on the left, then on the corresponding one on the right.\nIf a keypoint from one image is not available on the other, just click "next".\nYou can freely switch to other images while assigning keypoints.'))
         self.vlayout.addLayout(self.hblayout, 1)
 
         self.setCentralWidget(self.mainWidget)
@@ -144,9 +121,10 @@ class QImageViewer(QMainWindow):
         self.resize(800, 600)
 
         self.commands = []
-        self.world_points = []
+        self.worldPoints = []
         self.alpha = 1.0
         self.hdf = h5py.File(os.path.join(flags.base_dir, 'data.hdf5'), 'r')
+        self.out_file = os.path.join(flags.base_dir, 'keypoints.json')
         self.done = False
         self.camera = camera_utils.from_calibration(flags.calibration)
         print(self.hdf['camera_transform'].shape[0], "poses")
@@ -180,6 +158,33 @@ class QImageViewer(QMainWindow):
         frameId = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
         image.setFrameId(frameId)
 
+    def _onImageClick(self, image, id, event):
+        if len(self._keypoints) % len(self.images) != id:
+            print('Please click on the other image first')
+            return
+
+        x = event.pos().x()
+        y = event.pos().y()
+
+        curr_w = image.size().width()
+        curr_h = image.size().height()
+
+        frame = image.getFrame()
+        scale_x = frame.shape[1] / curr_w
+        scale_y = frame.shape[0] / curr_h
+
+        x = x * scale_x
+        y = y * scale_y
+
+        self._keypoints.append(Keypoint(x, y, image.getFrameId()))
+
+        self.compute_all()
+        for image in self.images:
+            cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
+            image.updateImage()
+
+        print(f"[image] clicked at ({x}, {y})")
+
     def _find_furthest(self):
         video_length = self.hdf['camera_transform'].shape[0]
         smallest_index = (None, None)
@@ -203,8 +208,46 @@ class QImageViewer(QMainWindow):
         print("Furthest frames: ", *smallest_index)
         return smallest_index
 
-    def triangulate(self):
+    def compute_all(self):
+        if len(self._keypoints) % len(self.images) != 0:
+            return
+
+        self.worldPoints = []
         print('Triangulating')
+        for pointLeft, pointRight in zip(self._keypoints[::len(self.images)], self._keypoints[1::len(self.images)]):
+            worldPoint = self._triangulate(pointLeft, pointRight)
+            self.worldPoints.append(worldPoint)
+
+        self._save()
+
+    def _save(self):
+        """Writes keypoints to file as json. """
+        contents = {
+            '3d_points': [x.ravel().tolist() for x in self.worldPoints] # Triangulated 3D points in world frame.
+        } # Points are ordered and correspond to each other.
+        with open(self.out_file, 'w') as f:
+            f.write(json.dumps(contents))
+
+    def _triangulate(self, left_point: Keypoint, right_point: Keypoint):
+        T_WL = self.hdf['camera_transform'][left_point.frameId]
+        T_WR = self.hdf['camera_transform'][right_point.frameId]
+        T_LW = linalg.inv_transform(T_WL)
+        T_RW = linalg.inv_transform(T_WR)
+        T_RL = T_RW @ T_WL
+
+        x = np.array([left_point.x, left_point.y])[:, None]
+        xp = np.array([right_point.x, right_point.y])[:, None]
+
+        P1 = camera_utils.projection_matrix(self.camera.K, np.eye(4))
+        P2 = self.camera.K @ np.eye(3, 4) @ T_RL
+
+        x = self.camera.undistort(x.T).T
+        xp = self.camera.undistort(xp.T).T
+
+        p_LK = cv2.triangulatePoints(P1, P2, x, xp)
+        p_LK = p_LK / p_LK[3]
+        p_WK = T_WL @ p_LK
+        return p_WK
 
     def print(self):
         dialog = QPrintDialog(self.printer, self)
