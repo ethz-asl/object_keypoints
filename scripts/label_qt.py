@@ -1,18 +1,20 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
+# Created by Giuseppe Rizzi
+# (c) Julian Keller, Giuseppe Rizzi, 2022
+# Parts on the code rely on the StereoLabeler code by Kenneth Blomqvist
+
 import os
 import argparse
 import json
 import cv2
-from turtle import right
 import random
 from skvideo import io as video_io
 import h5py
 from dataclasses import dataclass
 import numpy as np
 from perception.utils import camera_utils, linalg
-#from perception.constants import *
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap, QPalette, QPainter
@@ -26,6 +28,7 @@ class Keypoint:
     x: float
     y: float
     frameId: int
+
 
 class QCustomImage(QLabel):
     def __init__(self, scrollArea, button):
@@ -109,7 +112,10 @@ class QImageViewer(QMainWindow):
         self.mainWidget = QWidget()
         self.vlayout = QVBoxLayout(self.mainWidget)
         self.vlayout.addLayout(self.hlayout, 3)
-        self.vlayout.addWidget(QLabel('Use CTRL+Scroll to zoom, Scroll to go vertical and ALT+Scroll to go horizontal.\nClick on point on the left, then on the corresponding one on the right.\nIf a keypoint from one image is not available on the other, just click "next".\nYou can freely switch to other images while assigning keypoints.'))
+        self.vlayout.addWidget(QLabel('Use CTRL+Scroll to zoom, Scroll to go vertical and ALT+Scroll to go horizontal.\n'
+                                      'Click on point on the left, then on the corresponding one on the right.\n'
+                                      'If a keypoint from one image is not available in the other, just click "next".\n'
+                                      'You can freely switch to other images while assigning keypoints.'))
         self.vlayout.addLayout(self.hblayout, 1)
 
         self.setCentralWidget(self.mainWidget)
@@ -280,11 +286,6 @@ class QImageViewer(QMainWindow):
         newSize = factor * self.images[0].size()
         for image in self.images:
             image.resize(newSize)
-        #self.adjustScrollBar(self.scrollArea.horizontalScrollBar(), factor)
-        #self.adjustScrollBar(self.scrollArea.verticalScrollBar(), factor)
-
-        #self.zoomInAct.setEnabled(self.scaleFactor < 3.0)
-        #self.zoomOutAct.setEnabled(self.scaleFactor > 0.333)
 
     def zoomIn(self):
         self.zoomImages(1.25)
@@ -299,20 +300,10 @@ class QImageViewer(QMainWindow):
         self.updateActions()
 
     def about(self):
-        QMessageBox.about(self, "About Image Viewer",
-                          "<p>The <b>Image Viewer</b> example shows how to combine "
-                          "QLabel and QScrollArea to display an image. QLabel is "
-                          "typically used for displaying text, but it can also display "
-                          "an image. QScrollArea provides a scrolling view around "
-                          "another widget. If the child widget exceeds the size of the "
-                          "frame, QScrollArea automatically provides scroll bars.</p>"
-                          "<p>The example demonstrates how QLabel's ability to scale "
-                          "its contents (QLabel.scaledContents), and QScrollArea's "
-                          "ability to automatically resize its contents "
-                          "(QScrollArea.widgetResizable), can be used to implement "
-                          "zooming and scaling features.</p>"
-                          "<p>In addition the example shows how to use QPainter to "
-                          "print an image.</p>")
+        QMessageBox.about(self, "About Image Labeler Plus",
+                          "<p>The <b>Image Labeler Plus</b> can be used to label keypoints "
+                          "on a set of images. The corresponding 2D points are triangulated "
+                          "and the resulting 3D points are then stored to a file.")
 
     def createActions(self):
         self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print)
@@ -373,7 +364,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
     parser.add_argument('--calibration', type=str, default='config/calibration.yaml',
-                        help="Path to kalibr calibration file.")
+                        help="Path to calibration file.")
     flags = parser.parse_args()
 
     app = QApplication(sys.argv)
