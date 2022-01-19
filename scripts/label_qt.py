@@ -37,9 +37,6 @@ class QImageViewer(QMainWindow):
             imageLabel.setScaledContents(True)
             imageLabel.mousePressEvent = imgCallback
 
-            tst = QVBoxLayout()
-            tst.addWidget(imageLabel)
-
             class QCustomScrollArea(QScrollArea):
                 def wheelEvent(self2, event):
                     if event.modifiers() == Qt.ControlModifier:
