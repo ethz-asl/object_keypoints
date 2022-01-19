@@ -46,6 +46,7 @@ class QCustomImage(QLabel):
     def setFrameId(self, id):
         assert self._video is not None
         self._frameId = id
+        print(f'Frame id {id}')
         self.updateImage()
 
     def getFrameId(self):
@@ -91,9 +92,9 @@ class QImageViewer(QMainWindow):
             scrollArea.verticalScrollBar().valueChanged.connect(lambda value: self.syncScrollbars(scrollArea.verticalScrollBar(), True, value))
             scrollArea.setBackgroundRole(QPalette.Dark)
 
-            button = QPushButton('Next', self)
-            button.setToolTip('Move to the next frame')
-            button.clicked.connect(lambda: self._onNextClick(image))
+            button = QPushButton('Random Image', self)
+            button.setToolTip('Move to a random frame')
+            button.clicked.connect(lambda: self.nextImage(image))
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
             image = QCustomImage(scrollArea=scrollArea, button=button)
@@ -111,11 +112,13 @@ class QImageViewer(QMainWindow):
 
         self.mainWidget = QWidget()
         self.vlayout = QVBoxLayout(self.mainWidget)
-        self.vlayout.addLayout(self.hlayout, 3)
+        self.vlayout.addLayout(self.hlayout, 4)
         self.vlayout.addWidget(QLabel('Use CTRL+Scroll to zoom, Scroll to go vertical and ALT+Scroll to go horizontal.\n'
-                                      'Click on point on the left, then on the corresponding one on the right.\n'
-                                      'If a keypoint from one image is not available in the other, just click "next".\n'
-                                      'You can freely switch to other images while assigning keypoints.'))
+                                      'Alternatively use +, - and the arrow keys on your keyboard.\n'
+                                      'Click on a keypoint on the left, then on the corresponding one on the right.\n'
+                                      'If a keypoint from one image is not available in the other, just use another image.\n'
+                                      'You can freely switch to other images while assigning keypoints.\n'
+                                      'In the end, you can check the red backprojections by browsing through the images.'))
         self.vlayout.addLayout(self.hblayout, 1)
 
         self.setCentralWidget(self.mainWidget)
@@ -135,9 +138,9 @@ class QImageViewer(QMainWindow):
         self.camera = camera_utils.from_calibration(flags.calibration)
         print(self.hdf['camera_transform'].shape[0], "poses")
 
-        video = video_io.vread(os.path.join(flags.base_dir, 'frames_preview.mp4'))
+        self._video = video_io.vread(os.path.join(flags.base_dir, 'frames_preview.mp4'))
         for image in self.images:
-            image.setVideo(video)
+            image.setVideo(self._video)
 
         for image, frameId in zip(self.images, self._find_furthest()):
             image.setFrameId(frameId)
@@ -160,13 +163,14 @@ class QImageViewer(QMainWindow):
             self.zoomImages()
         QMainWindow.resizeEvent(self, event)
 
-    def _onNextClick(self, image):
-        frameId = random.randint(0, self.hdf['camera_transform'].shape[0]-1)
+    def nextImage(self, image, rnd=False):
+        frameId = random.randint(0, self.hdf['camera_transform'].shape[0]-1) if rnd else \
+            (image.getFrameId() + 1) % self.hdf['camera_transform'].shape[0]
         image.setFrameId(frameId)
 
     def _onImageClick(self, image, id, event):
         if len(self._keypoints) % len(self.images) != id:
-            print('Please click on the other image first')
+            QMessageBox(QMessageBox.Information, 'Point order', 'Please click on the other image first').exec_()
             return
 
         x = event.pos().x()
@@ -184,9 +188,11 @@ class QImageViewer(QMainWindow):
 
         self._keypoints.append(Keypoint(x, y, image.getFrameId()))
 
+        cv2.circle(frame, (int(x), int(y)), radius=3, color=(0, 0, 255), thickness=2)
+
         self.compute_all()
+
         for image in self.images:
-            cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
             image.updateImage()
 
         print(f"[image] clicked at ({x}, {y})")
@@ -214,6 +220,16 @@ class QImageViewer(QMainWindow):
         print("Furthest frames: ", *smallest_index)
         return smallest_index
 
+    def _backproject(self, worldPoint):
+        for frameId, frame in enumerate(self._video):
+            T_WL = self.hdf['camera_transform'][frameId]
+            T_LW = linalg.inv_transform(T_WL)
+            worldPoint = (worldPoint / worldPoint[3])
+            projected_x = self.camera.project(worldPoint[:3].T, T_LW)
+            projected_x = projected_x.ravel()
+
+            cv2.circle(frame, (int(projected_x[0]), int(projected_x[1])), radius=2, color=(255, 0, 0), thickness=2)
+
     def compute_all(self):
         if len(self._keypoints) % len(self.images) != 0:
             return
@@ -223,6 +239,9 @@ class QImageViewer(QMainWindow):
         for pointLeft, pointRight in zip(self._keypoints[::len(self.images)], self._keypoints[1::len(self.images)]):
             worldPoint = self._triangulate(pointLeft, pointRight)
             self.worldPoints.append(worldPoint)
+
+        # It is sufficient to backproject the most recently added point
+        self._backproject(worldPoint)
 
         self._save()
 
@@ -237,7 +256,6 @@ class QImageViewer(QMainWindow):
     def _triangulate(self, left_point: Keypoint, right_point: Keypoint):
         T_WL = self.hdf['camera_transform'][left_point.frameId]
         T_WR = self.hdf['camera_transform'][right_point.frameId]
-        T_LW = linalg.inv_transform(T_WL)
         T_RW = linalg.inv_transform(T_WR)
         T_RL = T_RW @ T_WL
 
@@ -307,13 +325,15 @@ class QImageViewer(QMainWindow):
 
     def createActions(self):
         self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print)
-        self.exitAct = QAction("E&xit", self, shortcut="Ctrl+Q", triggered=self.close)
-        self.nextLeft = QAction("Next &Left", self, shortcut="q", triggered=lambda: self._onNextClick(self.imageLeft))
-        self.nextRight = QAction("Next &Right", self, shortcut="w", triggered=lambda: self._onNextClick(self.imageRight))
+        self.exitAct = QAction("E&xit", self, shortcut="esc", triggered=self.close)
+        self.nextLeft = QAction("Next &Left", self, shortcut="q", triggered=lambda: self.nextImage(self.imageLeft, False))
+        self.nextRight = QAction("Next &Right", self, shortcut="w", triggered=lambda: self.nextImage(self.imageRight, False))
+        self.randomLeft = QAction("Random &Left", self, shortcut="a", triggered=lambda: self.nextImage(self.imageLeft, True))
+        self.randomRight = QAction("Random &Right", self, shortcut="s", triggered=lambda: self.nextImage(self.imageRight, True))
         self.zoomInAct = QAction("Zoom &In", self, shortcut="+", enabled=False, triggered=self.zoomIn)
         self.zoomOutAct = QAction("Zoom &Out", self, shortcut="-", enabled=False, triggered=self.zoomOut)
         self.normalSizeAct = QAction("&Normal Size", self, shortcut="0", enabled=False, triggered=self.zoomImages)
-        self.fitToWindowAct = QAction("&Fit to Window", self, enabled=False, checkable=True, shortcut="Ctrl+F",
+        self.fitToWindowAct = QAction("&Fit to Window", self, enabled=False, checkable=True, shortcut="f",
                                       triggered=self.fitToWindow)
         self.aboutAct = QAction("&About", self, triggered=self.about)
         self.aboutQtAct = QAction("About &Qt", self, triggered=qApp.aboutQt)
@@ -324,9 +344,12 @@ class QImageViewer(QMainWindow):
         self.fileMenu.addSeparator()
         self.fileMenu.addAction(self.exitAct)
 
-        self.labelingMenu = QMenu("&Labeling", self)
-        self.labelingMenu.addAction(self.nextLeft)
-        self.labelingMenu.addAction(self.nextRight)
+        self.navigationMenu = QMenu("&Navigation", self)
+        self.navigationMenu.addAction(self.nextLeft)
+        self.navigationMenu.addAction(self.nextRight)
+        self.navigationMenu.addSeparator()
+        self.navigationMenu.addAction(self.randomLeft)
+        self.navigationMenu.addAction(self.randomRight)
 
         self.viewMenu = QMenu("&View", self)
         self.viewMenu.addAction(self.zoomInAct)
@@ -340,7 +363,7 @@ class QImageViewer(QMainWindow):
         self.helpMenu.addAction(self.aboutQtAct)
 
         self.menuBar().addMenu(self.fileMenu)
-        self.menuBar().addMenu(self.labelingMenu)
+        self.menuBar().addMenu(self.navigationMenu)
         self.menuBar().addMenu(self.viewMenu)
         self.menuBar().addMenu(self.helpMenu)
 
