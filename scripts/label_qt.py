@@ -22,11 +22,12 @@ from PyQt5.QtWidgets import QWidget, QLabel, QSizePolicy, QScrollArea, QMessageB
 PATH = "/home/user/object_keypoints/2022-01-17-16-30-09_valve_perception"
 CALIBRATION = "/home/user/calibration/intrinsics.yaml"
 
-class QCustomImageLabel(QLabel):
+class QCustomImage(QLabel):
     def __init__(self):
         QLabel.__init__(self)
         self.setBackgroundRole(QPalette.Base)
         self.setScaledContents(True)
+        self.mousePressEvent = self._onImageClick
         self._frameId = None
         self._video = None
 
@@ -34,8 +35,32 @@ class QCustomImageLabel(QLabel):
         self._video = video
 
     def setFrame(self, id):
+        assert self._video is not None
         self._frameId = id
-        self.setPixmap(QPixmap.fromImage(self._np2qt_image(self._video[id])))
+        self._updateImage(self._video[id])
+
+    def _updateImage(self, frame):
+        self.setPixmap(QPixmap.fromImage(self._np2qt_image(frame)))
+
+    def _onImageClick(self, event):
+        # TODO resize point according to the current resizing of the image
+        # TODO save point for triangulation
+        x = event.pos().x()
+        y = event.pos().y()
+
+        curr_w = self.size().width()
+        curr_h = self.size().height()
+
+        frame = self.video[self._frameId]
+        scale_x = frame.shape[1] / curr_w
+        scale_y = frame.shape[0] / curr_h
+
+        x = x * scale_x
+        y = y * scale_y
+        frame = cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
+        self._updateImage(frame)
+
+        print(f"[image] clicked at ({x}, {y})")
 
     @staticmethod
     def _np2qt_image(img):
@@ -52,9 +77,8 @@ class QImageViewer(QMainWindow):
         self.hlayout = QHBoxLayout()
         self.hblayout = QHBoxLayout()
 
-        def createImage(imgCallback, btnCallback):
-            imageLabel = QCustomImageLabel()
-            imageLabel.mousePressEvent = imgCallback
+        def createImage(btnCallback):
+            imageLabel = QCustomImage()
 
             class QCustomScrollArea(QScrollArea):
                 def wheelEvent(self2, event):
@@ -82,8 +106,8 @@ class QImageViewer(QMainWindow):
 
             return imageLabel, scrollArea, button
 
-        self.imageLeft, imageLeftScroll, imageLeftNextButton = createImage(imgCallback=self._onImageClick, btnCallback=self._onClickLeft)
-        self.imageRight, imageRightScroll, imageRightNextButton = createImage(imgCallback=self._onImageClick, btnCallback=self._onClickRight)
+        self.imageLeft, imageLeftScroll, imageLeftNextButton = createImage(btnCallback=self._onClickLeft)
+        self.imageRight, imageRightScroll, imageRightNextButton = createImage(btnCallback=self._onClickRight)
         self.images = [self.imageLeft, self.imageRight]
         self.imageContexts = {
             self.imageLeft:
@@ -162,27 +186,6 @@ class QImageViewer(QMainWindow):
                     smallest_index = (i, j)
         print("Furthest frames: ", *smallest_index)
         return smallest_index
-
-    def _onImageClick(self, image, event):
-        # TODO resize point according to the current resizing of the image
-        # TODO save point for triangulation
-        x = event.pos().x()
-        y = event.pos().y()
-
-        curr_w = image.size().width()
-        curr_h = image.size().height()
-        
-        frame = self.video[self.left_frame_index]
-        scale_x = frame.shape[1] / curr_w
-        scale_y = frame.shape[0] / curr_h
-        
-        x = x * scale_x
-        y = y * scale_y
-        frame = cv2.circle(frame, (int(x), int(y)), radius=2, color=(0, 0, 255), thickness=2)
-        
-        self.imageRight.setPixmap(QPixmap.fromImage(self._np2qt_image(frame)))
-        
-        print(f"[image 1] clicked at ({x}, {y})")
     
     def setCurrent(self, path):
         self.done = False
@@ -203,7 +206,6 @@ class QImageViewer(QMainWindow):
         for image, frame in zip(self.images, self._find_furthest()):
             image.setFrame(frame)
 
-        #self.scrollArea.setVisible(True)
         self.printAct.setEnabled(True)
         self.fitToWindowAct.setEnabled(True)
         self.updateActions()
