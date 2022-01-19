@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import os
 import yaml
 from . import linalg
 
@@ -107,6 +108,13 @@ class StereoCamera:
         p_LK = p_LK[:, :3] / p_LK[:, 3:4]
 
         return p_LK
+
+    @classmethod
+    def from_file(cls, calibration_file):
+        camera = load_calibration_params(calibration_file)
+        left_camera = FisheyeCamera(camera['K'], camera['D'], camera['image_size'])
+        right_camera = FisheyeCamera(camera['Kp'], camera['Dp'], camera['image_size'])
+        return cls(left_camera, right_camera, camera['T_RL'])
 
 def camera_matrix(intrinsics):
     fx, fy, cx, cy = intrinsics

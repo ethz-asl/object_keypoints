@@ -29,7 +29,7 @@ class InferenceComponent:
 
 class KeypointExtractionComponent:
     name = "keypoints"
-    PROBABILITY_CUTOFF = 0.25
+    PROBABILITY_CUTOFF = 0.1
 
     def __init__(self, keypoint_config, prediction_size, bandwidth=1.0):
         # Add center point.

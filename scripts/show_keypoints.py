@@ -83,6 +83,7 @@ class PointVisualizer:
     def __init__(self, flags):
         self.flags = flags
         self.paused = False
+        self.next = False
         self.done = False
         self.window = hud.AppWindow("Keypoints", 640, 360)
         self._create_views()
@@ -102,6 +103,8 @@ class PointVisualizer:
             self.done = True
         elif event.key == ' ':
             self.paused = not self.paused
+        elif event.key == '\x00':
+            self.next = True
 
     def run(self):
         random.seed(self.flags.seed)
@@ -127,6 +130,9 @@ class PointVisualizer:
                     while self.paused:
                         self.window.poll_events()
                         rate.sleep()
+                    if self.next:
+                        self.next = False
+                        break
                     rate.sleep()
             finally:
                 view_model.close()
