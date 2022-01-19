@@ -224,25 +224,6 @@ class QImageViewer(QMainWindow):
         # keypoint_path = os.path.join(path, KEYPOINT_FILENAME)
         # if os.path.exists(keypoint_path):
         #     self._load_points(keypoint_path)
-    
-    def open(self):
-        options = QFileDialog.Options()
-        # fileName = QFileDialog.getOpenFileName(self, "Open File", QDir.currentPath())
-        fileName, _ = QFileDialog.getOpenFileName(self, 'QFileDialog.getOpenFileName()', '',
-                                                  'Images (*.png *.jpeg *.jpg *.bmp *.gif)', options=options)
-        if fileName:
-            image = QImage(fileName)
-            if image.isNull():
-                QMessageBox.information(self, "Image Viewer", "Cannot load %s." % fileName)
-                return
-
-            self.imageLeft.setPixmap(QPixmap.fromImage(image))
-            self.imageRight.setPixmap(QPixmap.fromImage(image))
-
-            self.scrollArea.setVisible(True)
-            self.printAct.setEnabled(True)
-            self.fitToWindowAct.setEnabled(True)
-            self.updateActions()
 
     def print(self):
         dialog = QPrintDialog(self.printer, self)
@@ -308,11 +289,10 @@ class QImageViewer(QMainWindow):
                           "print an image.</p>")
 
     def createActions(self):
-        self.openAct = QAction("&Open...", self, shortcut="Ctrl+O", triggered=self.open)
         self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print)
         self.exitAct = QAction("E&xit", self, shortcut="Ctrl+Q", triggered=self.close)
-        self.zoomInAct = QAction("Zoom &In (25%)", self, shortcut="+", enabled=False, triggered=self.zoomIn)
-        self.zoomOutAct = QAction("Zoom &Out (25%)", self, shortcut="-", enabled=False, triggered=self.zoomOut)
+        self.zoomInAct = QAction("Zoom &In", self, shortcut="+", enabled=False, triggered=self.zoomIn)
+        self.zoomOutAct = QAction("Zoom &Out", self, shortcut="-", enabled=False, triggered=self.zoomOut)
         self.normalSizeAct = QAction("&Normal Size", self, shortcut="0", enabled=False, triggered=self.zoomImage)
         self.fitToWindowAct = QAction("&Fit to Window", self, enabled=False, checkable=True, shortcut="Ctrl+F",
                                       triggered=self.fitToWindow)
@@ -321,7 +301,6 @@ class QImageViewer(QMainWindow):
 
     def createMenus(self):
         self.fileMenu = QMenu("&File", self)
-        self.fileMenu.addAction(self.openAct)
         self.fileMenu.addAction(self.printAct)
         self.fileMenu.addSeparator()
         self.fileMenu.addAction(self.exitAct)
