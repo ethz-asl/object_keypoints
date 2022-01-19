@@ -314,9 +314,9 @@ class QImageViewer(QMainWindow):
         self.openAct = QAction("&Open...", self, shortcut="Ctrl+O", triggered=self.open)
         self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print)
         self.exitAct = QAction("E&xit", self, shortcut="Ctrl+Q", triggered=self.close)
-        self.zoomInAct = QAction("Zoom &In (25%)", self, shortcut="Ctrl++", enabled=False, triggered=self.zoomIn)
-        self.zoomOutAct = QAction("Zoom &Out (25%)", self, shortcut="Ctrl+-", enabled=False, triggered=self.zoomOut)
-        self.normalSizeAct = QAction("&Normal Size", self, shortcut="Ctrl+S", enabled=False, triggered=self.zoomImage)
+        self.zoomInAct = QAction("Zoom &In (25%)", self, shortcut="+", enabled=False, triggered=self.zoomIn)
+        self.zoomOutAct = QAction("Zoom &Out (25%)", self, shortcut="-", enabled=False, triggered=self.zoomOut)
+        self.normalSizeAct = QAction("&Normal Size", self, shortcut="0", enabled=False, triggered=self.zoomImage)
         self.fitToWindowAct = QAction("&Fit to Window", self, enabled=False, checkable=True, shortcut="Ctrl+F",
                                       triggered=self.fitToWindow)
         self.aboutAct = QAction("&About", self, triggered=self.about)
