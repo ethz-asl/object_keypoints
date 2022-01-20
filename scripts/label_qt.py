@@ -89,8 +89,8 @@ class QImageViewer(QMainWindow):
                     QScrollArea.wheelEvent(self2, event)
 
             scrollArea = QCustomScrollArea()
-            scrollArea.horizontalScrollBar().valueChanged.connect(lambda value: self.syncScrollbars(scrollArea.horizontalScrollBar(), False, value))
-            scrollArea.verticalScrollBar().valueChanged.connect(lambda value: self.syncScrollbars(scrollArea.verticalScrollBar(), True, value))
+            scrollArea.horizontalScrollBar().valueChanged.connect(lambda value: self._syncScrollbars(scrollArea.horizontalScrollBar(), False, value))
+            scrollArea.verticalScrollBar().valueChanged.connect(lambda value: self._syncScrollbars(scrollArea.verticalScrollBar(), True, value))
             scrollArea.setBackgroundRole(QPalette.Dark)
 
             button = QPushButton('Random Image', self)
@@ -124,8 +124,8 @@ class QImageViewer(QMainWindow):
 
         self.setCentralWidget(self.mainWidget)
 
-        self.createActions()
-        self.createMenus()
+        self._createActions()
+        self._createMenus()
         
         self.setWindowTitle("Image Labeler Plus")
         self.resize(800, 600)
@@ -148,7 +148,7 @@ class QImageViewer(QMainWindow):
 
         self.printAct.setEnabled(True)
         self.fitToWindowAct.setEnabled(True)
-        self.updateActions()
+        self._updateActions()
 
         self._load()
 
@@ -221,7 +221,7 @@ class QImageViewer(QMainWindow):
         print("Furthest frames: ", *smallest_index)
         return smallest_index
 
-    def _backproject(self, worldPoint):
+    def _backproject(self, worldPoint, index):
         for frameId, frame in enumerate(self._video):
             T_WL = self.hdf['camera_transform'][frameId]
             T_LW = linalg.inv_transform(T_WL)
@@ -230,6 +230,7 @@ class QImageViewer(QMainWindow):
             projected_x = projected_x.ravel()
 
             cv2.circle(frame, (int(projected_x[0]), int(projected_x[1])), radius=2, color=(255, 0, 0), thickness=2)
+            cv2.putText(frame, str(index), (int(projected_x[0]), int(projected_x[1])), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(255, 0, 0))
 
     def compute_all(self):
         if len(self._keypoints) % len(self.images) != 0:
@@ -239,13 +240,15 @@ class QImageViewer(QMainWindow):
         for pointLeft, pointRight in zip(self._keypoints[::len(self.images)],
                                          self._keypoints[1::len(self.images)]):
             # Only compute points which have not been computed yet
+            # Otherwise, points might get added twice to worldPoints
+            # Or, loaded points from the file would be overwritten
             if pointLeft.worldPoint is not None:
                 continue
             worldPoint = self._triangulate(pointLeft, pointRight)
             pointLeft.worldPoint = worldPoint
             pointRight.worldPoint = worldPoint
+            self._backproject(worldPoint, len(self.worldPoints))
             self.worldPoints.append(worldPoint)
-            self._backproject(worldPoint)
 
         self._save()
 
@@ -255,9 +258,10 @@ class QImageViewer(QMainWindow):
 
         with open(self.out_file, 'rt') as f:
             points = json.loads(f.read())
-            self.worldPoints = [np.array(x).reshape(4, 1) for x in points['3d_points']]
-            for worldPoint in self.worldPoints:
-                self._backproject(worldPoint)
+            for x in points['3d_points']:
+                worldPoint = np.array(x).reshape(4, 1)
+                self._backproject(worldPoint, len(self.worldPoints))
+                self.worldPoints.append(worldPoint)
 
         self.updateImages()
 
@@ -300,7 +304,7 @@ class QImageViewer(QMainWindow):
             painter.setWindow(self.imageLabel1.pixmap().rect())
             painter.drawPixmap(0, 0, self.imageLabel1.pixmap())
 
-    def syncScrollbars(self, sender, vertical, value):
+    def _syncScrollbars(self, sender, vertical, value):
         for image in self.images:
             if vertical:
                 bar = image.scrollArea.verticalScrollBar()
@@ -331,7 +335,7 @@ class QImageViewer(QMainWindow):
         fitToWindow = self.fitToWindowAct.isChecked()
         if fitToWindow:
             self.zoomImages()
-        self.updateActions()
+        self._updateActions()
 
     def about(self):
         QMessageBox.about(self, "About Image Labeler Plus",
@@ -339,7 +343,7 @@ class QImageViewer(QMainWindow):
                           "on a set of images. The corresponding 2D points are triangulated "
                           "and the resulting 3D points are then stored to a file.")
 
-    def createActions(self):
+    def _createActions(self):
         self.printAct = QAction("&Print...", self, shortcut="Ctrl+P", enabled=False, triggered=self.print)
         self.exitAct = QAction("E&xit", self, shortcut="esc", triggered=self.close)
         self.nextLeft = QAction("Next &Left", self, shortcut="q", triggered=lambda: self.nextImage(self.imageLeft, False))
@@ -354,7 +358,7 @@ class QImageViewer(QMainWindow):
         self.aboutAct = QAction("&About", self, triggered=self.about)
         self.aboutQtAct = QAction("About &Qt", self, triggered=qApp.aboutQt)
 
-    def createMenus(self):
+    def _createMenus(self):
         self.fileMenu = QMenu("&File", self)
         self.fileMenu.addAction(self.printAct)
         self.fileMenu.addSeparator()
@@ -383,14 +387,10 @@ class QImageViewer(QMainWindow):
         self.menuBar().addMenu(self.viewMenu)
         self.menuBar().addMenu(self.helpMenu)
 
-    def updateActions(self):
+    def _updateActions(self):
         self.zoomInAct.setEnabled(not self.fitToWindowAct.isChecked())
         self.zoomOutAct.setEnabled(not self.fitToWindowAct.isChecked())
         self.normalSizeAct.setEnabled(not self.fitToWindowAct.isChecked())
-
-    def adjustScrollBar(self, scrollBar, factor):
-        scrollBar.setValue(int(factor * scrollBar.value()
-                               + ((factor - 1) * scrollBar.pageStep() / 2)))
 
 
 if __name__ == '__main__':
