@@ -111,7 +111,9 @@ class SceneDataset(IterableDataset):
         return self.poses.shape[0]
 
     def _load_calibration(self):
-        calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
+        path = "/home/user/perception/object_keypoints/config"
+        calibration_file = os.path.join(path, 'calibration.yaml')
+        # calibration_file = os.path.join(self.base_dir, 'calibration.yaml')
         calibration = camera_utils.load_calibration_params(calibration_file)
         self.K = calibration['K']
         self.D = calibration['D']

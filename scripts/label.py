@@ -191,7 +191,6 @@ class LabelingApp:
         
         def optimize_3d_points(world_point):
             world_point = np.append(world_point ,1.0)
-            print("inside: ", world_point)
             error = 0
             for i, [new_points, ref_idx] in enumerate(zip(self.new_frame_keypoints,self.frame_idxs)):
                 
@@ -201,7 +200,7 @@ class LabelingApp:
                 current_error = LA.norm(new_points[self.pt_idx]-reproj_point)
                 error = error + current_error
                 
-            print("reprojection error of point: ", self.pt_idx, "  is: ", error)
+            # print("reprojection error of point: ", self.pt_idx, "  is: ", error)
             return error
                 
         
@@ -210,7 +209,7 @@ class LabelingApp:
         for j,point in enumerate(self.world_points):
             self.pt_idx = j
             point = np.squeeze(point)
-            res = least_squares(optimize_3d_points,point[0:3],verbose=1)
+            res = least_squares(optimize_3d_points,point[0:3],verbose=0)
             res.x = np.append(res.x ,1)
             opt_point = np.expand_dims(res.x,axis=1)
             self_opt_world_points[j] = np.array(opt_point)
@@ -282,27 +281,39 @@ class LabelingApp:
         self._save()
 
     def _right_pane_clicked(self, event):
+        
         print(f"right pane clicked {event.p.x} {event.p.y}")
         command = AddRightPointCommand(event.p, self.right_image_pane.get_rect())
         command.forward(self)
-        # if self.flags.refine:
-        #     print("added right point: ", command.image_point.x, command.image_point.y )
+        
+        if self.flags.refine:
+            self.new_keypoints.append(np.array([command.image_point.x,command.image_point.y]))
+            # print("current frame's new keypoints: ", self.new_keypoints)
+            # print("current frame's idx: ", self.frame_idxs)
+            
         self.commands.append(command)
         self._save()
 
     def _swap_left_frame(self):
         
         if self.flags.refine:
-            if (len(self.new_keypoints)!= len(self.world_points)):
+
+            # in refine mode, add in the current frame id and keypoints
+            if len(self.new_keypoints) == len(self.world_points):
+                self.new_frame_keypoints.append(self.new_keypoints)
+                self.frame_idxs.append(self.left_frame_index)
+            else:
                 print("The current keypoints number should be: ", len(self.world_points))
                 print("But you have only labelled: ", len(self.new_keypoints))
-                return
-            
-            # in refine mode, add in the current frame id and keypoints
-            if self.flags.refine:
-                self.frame_idxs.append(self.left_frame_index)
-            if len(self.new_keypoints) > 1:
+                print("Add the old keypoint instead")
+                self.new_keypoints = []
+                for point in self.world_points:
+                    T = self.hdf['camera_transform'][self.left_frame_index]
+                    reproj_point = _project(point, T, self.K, self.D)
+                    self.new_keypoints.append(reproj_point)
                 self.new_frame_keypoints.append(self.new_keypoints)
+                self.frame_idxs.append(self.left_frame_index)
+                    
             self.new_keypoints = []
             # print(" all new keypoints: ", self.new_frame_keypoints)
             # print(" all frames: ", self.frame_idxs)
@@ -311,11 +322,24 @@ class LabelingApp:
         left_frame = self.video[self.left_frame_index]
         self.left_image_pane.set_texture(left_frame)
         self.left_keypoints = []
-
         self.left_points.clear_points()
         self._recompute_points()
 
     def _swap_right_frame(self):
+        
+        if self.flags.refine:
+
+            # in refine mode, add in the current frame id and keypoints
+            if len(self.new_keypoints) == len(self.world_points):
+                self.new_frame_keypoints.append(self.new_keypoints)
+                self.frame_idxs.append(self.right_frame_index)
+            else:
+                print("The current keypoints number should be: ", len(self.world_points))
+                print("But you have only labelled: ", len(self.new_keypoints))
+            
+            self.new_keypoints = []
+            # print(" all new keypoints: ", self.new_frame_ke
+            
         self.right_frame_index = random.randint(0, self.video.shape[0]-1)
         right_frame = self.video[self.right_frame_index]
         self.right_image_pane.set_texture(right_frame)

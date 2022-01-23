@@ -59,7 +59,9 @@ class Sequence:
             self.keypoints = np.array(json.loads(f.read())['3d_points'])[:, :3]
 
     def _load_calibration(self):
-        calibration_file = os.path.join(self.sequence_path, 'calibration.yaml')
+        path = "/home/user/perception/object_keypoints/config"
+        calibration_file = os.path.join(path, 'calibration.yaml')
+        # calibration_file = os.path.join(self.sequence_path, 'calibration.yaml')
         params = camera_utils.load_calibration_params(calibration_file)
         camera = camera_utils.FisheyeCamera(params['K'], params['D'], params['image_size'])
         camera = camera.scale(SceneDataset.height_resized / SceneDataset.height)
