@@ -9,6 +9,7 @@ from sklearn import metrics
 
 from perception.datasets.video import _gaussian_kernel, default_length_scale
 from numba import jit
+import matplotlib.pyplot as plt
 
 class InferenceComponent:
     name = "inference"
@@ -29,12 +30,14 @@ class InferenceComponent:
 
 class KeypointExtractionComponent:
     name = "keypoints"
-    PROBABILITY_CUTOFF = 0.25
+    PROBABILITY_CUTOFF = 0.5
 
     def __init__(self, keypoint_config, prediction_size, bandwidth=1.0):
         # Add center point.
         self.keypoint_config = [1] + keypoint_config['keypoint_config']
         self.n_keypoints = sum(self.keypoint_config)
+        print("[KeypointExtractionComponent]: {} keypoints are (include center)".format(self.keypoint_config))
+
         prediction_size = prediction_size
         self.kernel = torch.ones((1, 1, 5, 5), dtype=torch.float32)
         self.image_indices = torch.zeros((*prediction_size, 2), dtype=torch.int)
@@ -69,10 +72,10 @@ class KeypointExtractionComponent:
             probabilities = torch.tensor(heatmap[i].astype(np.float32))[None, None]
             weights_c = torch.nn.functional.conv2d(probabilities, self.kernel, bias=None, stride=1,
                     padding=2)
-            surpressed = nms(weights_c)
-            indices = self.image_indices[surpressed[0, 0] > 0.5]
+            surpressed = nms(weights_c)  
+            indices = self.image_indices[surpressed[0, 0] > self.PROBABILITY_CUTOFF]
             points, confidence = self._compute_points(indices, probabilities[0, 0])
-
+          
             points = [x[::-1] for x in points]
             out_points.append(points)
             confidences.append(confidence)
@@ -87,7 +90,6 @@ class KeypointExtractionComponent:
             kp, c = self._extract_keypoints(frames[i])
             keypoints.append(kp)
             confidence.append(c)
-
         return keypoints, confidence
 
 class ObjectExtraction:
@@ -184,19 +186,19 @@ class ObjectKeypointPipeline:
         heatmap = heatmap.numpy()
         p_centers = p_centers[0].numpy()
         p_depth = p_depth[0].numpy()
-        points, confidence = self.keypoint_extraction(heatmap)
+        points, confidence = self.keypoint_extraction(heatmap)        
         detected_objects = self.object_extraction(points[0], confidence[0], p_centers)
+
         objects = []
         for obj in detected_objects:
             world_points = [self.detection_to_point(obj['center'][None], p_depth[0])]
             for i in range(len(obj['heatmap_points'])):
                 point = self.detection_to_point(obj['heatmap_points'][i], p_depth[1 + i])
                 world_points.append(point)
-            objects.append({
-                'p_centers': obj['p_centers'],
-                'keypoints': [obj['center'][None]] + obj['heatmap_points'],
-                'p_C': world_points
-            })
+            new_object = {'p_centers': obj['p_centers'],
+                          'keypoints': [obj['center'][None]] + obj['heatmap_points'],
+                          'p_C': world_points}   
+            objects.append(new_object)
         return objects
 
 class LearnedKeypointTrackingPipeline(ObjectKeypointPipeline):
