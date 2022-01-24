@@ -86,6 +86,7 @@ class StereoCamera:
         self.right_camera = right_camera
         self.T_RL = T_RL
         self.T_LR = linalg.inv_transform(T_RL)
+        self.image_size = self.left_camera.image_size
         self.F = fundamental_matrix(T_RL, self.left_camera.K, self.right_camera.K)
 
     def triangulate(self, left_keypoints, right_keypoints):

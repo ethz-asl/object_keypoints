@@ -171,7 +171,7 @@ class DetectionToPoint:
         return self.camera.unproject(xy, zs)
 
 class ObjectKeypointPipeline:
-    def __init__(self, prediction_size, points_3d, keypoint_config):
+    def __init__(self, prediction_size, keypoint_config):
         self.keypoint_extraction = KeypointExtractionComponent(keypoint_config, prediction_size)
         self.object_extraction = ObjectExtraction(keypoint_config, prediction_size)
         self.detection_to_point = DetectionToPoint()
