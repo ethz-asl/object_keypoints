@@ -15,6 +15,7 @@ External Dependencies:
 - ROS melodic/noetic
 
 Install HUD. Then install dependencies with `pip install -r requirements.txt` and finally install the package using `pip3 install -e .`.
+Also install the files in [`perception/corner_net_lite/core/models/py_utils/_cpools`](perception/corner_net_lite/core/models/py_utils/_cpools) by issuing `python3 setup.py install --user` in that folder.
 
 ## Usage
 
