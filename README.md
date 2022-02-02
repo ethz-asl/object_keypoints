@@ -11,10 +11,24 @@ Once the images are labeled, a model can be learned to detect keypoints in the i
 ## Installation
 
 External Dependencies:
-- [HUD](https://github.com/ethz-asl/hud)
+- [HUD](https://github.com/ethz-asl/hud) (only for non-qt version)
 - ROS melodic/noetic
 
-Install HUD. Then install dependencies with `pip install -r requirements.txt` and finally install the package using `pip3 install -e .`.
+Install HUD. 
+
+### conda
+
+The preferred way of installation is with miniconda.
+Just set `export OBJECT_KEYPOINTS_DIR=<dir>` to your directory and run
+```bash
+scripts/install.sh
+```
+
+### pip3
+
+Alternatively, you can install via pip3.
+Install dependencies with `pip install -r requirements.txt` and finally install the package using `pip3 install -e .`.
+
 Also install the files in [`perception/corner_net_lite/core/models/py_utils/_cpools`](perception/corner_net_lite/core/models/py_utils/_cpools) by issuing `python3 setup.py install --user` in that folder.
 
 ## Usage

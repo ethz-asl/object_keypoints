@@ -16,7 +16,7 @@ conda create -n env Python=3.8 numpy
 source miniconda3/bin/activate
 conda activate env
 
-conda install pytorch=1.8.1 torchvision=0.9.1 cudatoolkit=11.3 -c pytorch -c conda-forge -y
+conda install pytorch==1.8.1 torchvision==0.9.1 cudatoolkit=10.2 -c pytorch
 conda install ffmpeg -y
 
 cd $OBJECT_KEYPOINTS_DIR
@@ -25,7 +25,8 @@ pip install -r requirements.txt
 pip install -e .
 
 cd perception/corner_net_lite/core/models/py_utils/_cpools/
-python3 ./setup.py install --user
+pip install .
+#python3 ./setup.py install --user
 
 cd
 
