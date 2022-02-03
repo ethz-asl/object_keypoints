@@ -43,21 +43,25 @@ def _to_msg(keypoint, time, frame):
 class ObjectKeypointPipeline:
     def __init__(self):
         left_image_topic = rospy.get_param("object_keypoints_ros/left_image_topic", "/zedm/zed_node/left_raw/image_raw_color")
-        right_image_topic = rospy.get_param("object_keypoints_ros/right_image_topic", "/zedm/zed_node/right_raw/image_raw_color")
         self.left_camera_frame = rospy.get_param('object_keypoints_ros/left_camera_frame')
         self.left_sub = rospy.Subscriber(left_image_topic, Image, callback=self._left_image_callback, queue_size=1)
-        # self.right_sub = rospy.Subscriber(right_image_topic, Image, callback=self._right_image_callback, queue_size=1)
         self.left_image = None
         self.left_image_ts = None
         self.right_image = None
         self.right_image_ts = None
         self.bridge = CvBridge()
         self.use_gpu = rospy.get_param("object_keypoints_ros/gpu", True)
-        self.input_size = (511, 511)
-        self.IMAGE_SIZE = (511, 511)
-        self.prediction_size = SceneDataset.prediction_size
+        
+        # params
+        self.input_size = (511, 511)  # TODO: hard-coded
+        self.IMAGE_SIZE = (1280, 720)
+        
+        self.prediction_size = SceneDataset.prediction_size # 64 x 64
         self.image_offset = SceneDataset.image_offset
-
+        
+        # 2D objects
+        self.points_left = []
+            
         self.keypoint_config_path = rospy.get_param('object_keypoints_ros/keypoints')
         with open(self.keypoint_config_path, 'rt') as f:
             self.keypoint_config = json.load(f)
@@ -75,19 +79,15 @@ class ObjectKeypointPipeline:
         self.rgb_std = torch.tensor([0.25, 0.25, 0.25], requires_grad=False, dtype=torch.float32)[:, None, None]
         
         self._read_calibration()
-        scaling_factor = np.array(self.image_size) / np.array(self.prediction_size)
+        self.scaling_factor = np.array(self.IMAGE_SIZE) / np.array(self.prediction_size)
+        rospy.loginfo("scalling facotr: ")
+        rospy.loginfo(self.scaling_factor)
         
-        # Stereo version
-        # self.pipeline.reset(self.stereo_camera)
-
         # Monocular Version
         self.pipeline.reset(self.camera_small)
 
         self._compute_bbox_dimensions()
 
-        # TF
-        # self.tf_buffer = tf2_ros.Buffer()
-        # self.listener = tf2_ros.TransformListener(self.tf_buffer)
         
         # kp marker
         self.kpArray = MarkerArray()
@@ -120,14 +120,8 @@ class ObjectKeypointPipeline:
         self.image_size = params['image_size']
       
         left_camera = camera_utils.FisheyeCamera(params['K'], params['D'], params['image_size'])
-        right_camera = camera_utils.FisheyeCamera(params['Kp'], params['Dp'], params['image_size'])
         self.left_camera = left_camera
-        self.right_camera = right_camera
 
-        # Stereo version
-        # self.stereo_camera = camera_utils.StereoCamera(self.left_camera, self.right_camera, params['T_RL'])
-        #self.stereo_camera_small = camera_utils.StereoCamera(left_camera, right_camera, params['T_RL'])
-        
         # Cooperate with monocular version
         camera = camera_utils.FisheyeCamera(params['K'], params['D'], params['image_size'])
         camera = camera.scale(SceneDataset.height_resized / SceneDataset.height)
@@ -149,11 +143,6 @@ class ObjectKeypointPipeline:
             self.bbox_size = (bounding_box.max(axis=0) - bounding_box.min(axis=0)) * 0.5
         else:
             self.bbox_size = None
-
-    # def _right_image_callback(self, image):
-    #     img = self.bridge.imgmsg_to_cv2(image, 'rgb8')
-    #     self.right_image = img
-    #     self.right_image_ts = image.header.stamp
 
     def _left_image_callback(self, image):
         img = self.bridge.imgmsg_to_cv2(image, 'rgb8')
@@ -180,21 +169,13 @@ class ObjectKeypointPipeline:
 
     def _publish_heatmaps(self, left, right, left_keypoints, right_keypoints):
         left = ((left + 1.0) * 0.5).sum(axis=0)
-        right = ((right + 1.0) * 0.5).sum(axis=0)
         left = np.clip(cm.inferno(left) * 255.0, 0, 255.0).astype(np.uint8)
-        right = np.clip(cm.inferno(right) * 255.0, 0, 255.0).astype(np.uint8)
 
         for kp in left_keypoints:
             kp = kp.round().astype(int)
             left = cv2.circle(left, (kp[0], kp[1]), radius=2, color=(0, 255, 0), thickness=-1)
         left_msg = self.bridge.cv2_to_imgmsg(left[:, :, :3], encoding='passthrough')
         self.left_heatmap_pub.publish(left_msg)
-
-        for kp in right_keypoints:
-            kp = kp.round().astype(int)
-            right = cv2.circle(right, (kp[0], kp[1]), radius=1, color=(0, 255, 0, 100), thickness=-1)
-        right_msg = self.bridge.cv2_to_imgmsg(right[:, :, :3], encoding='passthrough')
-        self.right_heatmap_pub.publish(right_msg)
 
     def _publish_bounding_box(self, T, pose_msg):
         if self.bbox_size is not None:
@@ -224,40 +205,59 @@ class ObjectKeypointPipeline:
     def _to_image(self, frame):
         frame = SceneDataset.to_image(frame)
         return cv2.resize(frame, self.IMAGE_SIZE)
-
+    
+    def kp_map_to_image(self, kp):
+        kp_ = []
+        for i, pt in enumerate(kp):
+            if pt.size == 0:
+                kp_.append(np.array([]))
+                continue
+            pt = np.squeeze(pt)     
+            pt = np.multiply( pt, self.scaling_factor).astype(np.int64)
+            kp_.append( np.flip(pt) )   # TODO: notice kp idx is flipped from image idx in 2D 
+        return kp_
+    
     def step(self):
+        
         I = torch.eye(4)[None]
+        
         if self.left_image is not None:
             left_image = self._preprocess_image(self.left_image)
             objects, heatmap = self.pipeline(left_image)
             self.left_image = None
  
             heatmap_left = self._to_heatmap(heatmap[0].numpy())
-  
+            
             left_image = left_image.cpu().numpy()[0]
-
+            
+            #rospy.loginfo("image size: ")              # [3, 511, 511]
+            #rospy.loginfo(np.shape(left_image))
+            
             left_rgb = self._to_image(left_image)
             image_left = (0.3 * left_rgb + 0.7 * heatmap_left).astype(np.uint8)
             
-            points_left = []
+            # 2D objects
+            self.points_left = []
             self.kp_poses.poses.clear()
             self.kpArray.markers.clear()
+            
             for obj in objects:
-                p_left = np.concatenate([p + 1.0 for p in obj['keypoints'] if p.size != 0], axis=0)
+                #p_left = np.concatenate([p + 1.0 for p in obj['keypoints'] if p.size != 0], axis=0)
                 kp_num = len(obj['p_C'])
-                # rospy.loginfo(obj['p_C'])
-                # rospy.loginfo("kp num: ")
-                # rospy.loginfo(kp_num)
+                
                 if kp_num == 0:
                     return 
+                
                 for i, p_l in enumerate(obj['p_C']):
+                    
                     if p_l is None:  # TODO (boyang): use the modified msg to replace this
+        
                         self.kp_pose = Pose()
                         self.kp_pose.orientation.w = 1.0
                         self.kp_pose.position.z = -100
                         self.kp_poses.poses.append(self.kp_pose)
                         continue
-                    # rospy.loginfo(p_l)
+
                     self.kp_pose = Pose()
                     self.kp_pose.orientation.w = 1.0
                     self.kp_pose.orientation.x = 0.0
@@ -267,14 +267,28 @@ class ObjectKeypointPipeline:
                     self.kp_pose.position.y = p_l[0][1]
                     self.kp_pose.position.z = p_l[0][2]
                     self.kp_poses.poses.append(self.kp_pose)
-                #rospy.loginfo(p_left)
-                points_left.append(p_left)
+                
+                rospy.loginfo("2D kp: ")
+                rospy.loginfo(obj['keypoints'])  # indx in 64,64 image
 
+                # extract 2D keypoints
+                self.points_left = self.kp_map_to_image(obj['keypoints'])
+                
+                rospy.loginfo("after scalling: ")
+                rospy.loginfo(self.points_left)  # indx in 64,64 image
+
+                for i, pt in enumerate(self.points_left):
+                    if pt.size != 0:
+                        green = np.zeros((20,20,3))
+                        green[:,:,1] = 100
+                        image_left[self.points_left[i][0]-10:self.points_left[i][0]+10, self.points_left[i][1]-10:self.points_left[i][1]+10,:] += green.astype(np.uint8)
+                
+            # pub result image
             self._publish_result(image_left)
+            # pub 3D keypoints
             self._publish_kp_3d_poses()
             
-
-            
+                     
 if __name__ == "__main__":
     with torch.no_grad():
         rospy.init_node("object_keypoints_ros")
