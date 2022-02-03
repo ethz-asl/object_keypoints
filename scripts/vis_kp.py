@@ -19,15 +19,12 @@ from visualization_msgs.msg import MarkerArray
 class Keypoints3dVisualizer:
 
     def __init__(self):
-        rospy.init_node("kp_3d_makers_vis_node")
         rospy.loginfo("self.kp_markers node init")
-        self.marker_array_init()
-        self.kp_marker_array_publisher = rospy.Publisher("kp_markers",MarkerArray,queue_size=10)
-
-    def marker_array_init(self):
         self.kp_marker_array = MarkerArray()
-    
-    def update_kp_marker(self,msg):
+        self.kp_marker_array_publisher = rospy.Publisher("/kp_markers", MarkerArray, queue_size=10)
+        self.kp_subscriber = rospy.Subscriber("/kp_3d_poses", PoseArray, self.callback, queue_size=1)
+
+    def update_kp_marker(self, msg):
         for i in range(self.kp_num):
             self.kp_marker = Marker()
             # self.kp_marker.header.stamp  = rospy.Time.now()
@@ -50,16 +47,14 @@ class Keypoints3dVisualizer:
             self.kp_marker_array.markers.append(self.kp_marker)
 
     def callback(self, msg):
+        self.kp_marker_array.markers.clear()
         self.kp_num = len(msg.poses)
         self.update_kp_marker(msg)
         self.kp_marker_array_publisher.publish(self.kp_marker_array)
-        self.kp_marker_array.markers.clear()
-
-    def kp_poses_listener(self):
-        rospy.Subscriber("/kp_3d_poses", PoseArray, callback = self.callback)
-        rospy.spin()
-    
 
 if __name__ == "__main__":
+    rospy.init_node("kp_3d_makers_vis_node")
+        
     kp_vis = Keypoints3dVisualizer()
-    kp_vis.kp_poses_listener()
+    rospy.spin()
+   

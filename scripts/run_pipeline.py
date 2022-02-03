@@ -5,8 +5,8 @@ from pickle import NONE
 import sys
 
 from numpy.core.fromnumeric import size
-sys.path.insert(0, '/home/boyang/catkin_ws/devel/lib/python3/dist-packages')
-sys.path.insert(0, '/home/boyang/thesis/perception/kp_new')
+# sys.path.insert(0, '/home/user/catkin_ws/devel/lib/python3/dist-packages')
+# sys.path.insert(0, '/home/usr/thesis/perception/kp_new')
 import json
 
 import rospy
@@ -245,15 +245,19 @@ class ObjectKeypointPipeline:
             for obj in objects:
                 p_left = np.concatenate([p + 1.0 for p in obj['keypoints'] if p.size != 0], axis=0)
                 kp_num = len(obj['p_C'])
-                rospy.loginfo(obj['p_C'])
-                rospy.loginfo("kp num: ")
-                rospy.loginfo(kp_num)
+                # rospy.loginfo(obj['p_C'])
+                # rospy.loginfo("kp num: ")
+                # rospy.loginfo(kp_num)
                 if kp_num == 0:
                     return 
                 for i, p_l in enumerate(obj['p_C']):
-                    if p_l is None:
+                    if p_l is None:  # TODO (boyang): use the modified msg to replace this
+                        self.kp_pose = Pose()
+                        self.kp_pose.orientation.w = 1.0
+                        self.kp_pose.position.z = -100
+                        self.kp_poses.poses.append(self.kp_pose)
                         continue
-                    rospy.loginfo(p_l)
+                    # rospy.loginfo(p_l)
                     self.kp_pose = Pose()
                     self.kp_pose.orientation.w = 1.0
                     self.kp_pose.orientation.x = 0.0
