@@ -21,7 +21,7 @@ def read_args():
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
-KEYPOINT_FILENAME = 'keypoints.json'
+KEYPOINT_FILENAME = 'keypoints_dense.json'
 
 class ViewModel:
     def __init__(self, flags, directory):

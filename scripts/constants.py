@@ -6,7 +6,7 @@ def _to_camera_matrix(proj):
         [0., proj[1], proj[3]],
         [0., 0., 1.]], dtype=np.float64)
 
-KEYPOINT_FILENAME = 'keypoints.json'
+KEYPOINT_FILENAME = 'keypoints_dense.json'
 IMAGE_HEIGHT = 720
 IMAGE_WIDTH = 1280
 IMAGE_RECT = hud.Rect(0, 0, IMAGE_WIDTH, IMAGE_HEIGHT)

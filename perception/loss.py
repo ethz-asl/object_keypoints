@@ -3,11 +3,12 @@ from torch.nn.modules.loss import _Loss
 from torch.nn import functional as F
 
 class KeypointLoss(_Loss):
-    def __init__(self, keypoint_config, depth_weight=10.0, center_weight=1.0, size_average=None, reduce=None, reduction='mean'):
+    def __init__(self, keypoint_config, depth_weight=100.0, center_weight=1.0, size_average=None, reduce=None, reduction='mean'):
         super().__init__(size_average, reduce, reduction)
         self.keypoint_config = keypoint_config
         self.n_keypoint_maps = len(keypoint_config) + 1 # Add one for center map.
         self.depth_weight = depth_weight
+        print("depth weight = ", self.depth_weight)
         self.center_weight = center_weight
         if reduction == 'mean':
             self.reduce = torch.mean

@@ -27,6 +27,7 @@ def read_args():
     parser.add_argument('--weight-decay', default=0.01, type=float)
     parser.add_argument('--features', default=128, type=int, help="Intermediate features in network.")
     parser.add_argument('--center-weight', default=1.0, help="Weight for center loss vs. heatmap loss.")
+    parser.add_argument('--depth-weight', default=10.0, help="Weight for depth loss.")
     parser.add_argument('--lr', default=4e-3, type=float, help="Learning rate.")
     parser.add_argument('--dropout', default=0.1, type=float)
     parser.add_argument('--resume', default=None)
@@ -43,13 +44,14 @@ def _init_worker(worker_id):
     np.random.seed(worker_id)
 
 class KeypointModule(pl.LightningModule):
-    def __init__(self, keypoint_config, lr=3e-4, features=128, dropout=0.1, weight_decay=0.01, center_weight=10.0):
+    def __init__(self, keypoint_config, lr=3e-4, features=128, dropout=0.1, weight_decay=0.01, depth_weight= 10.0, center_weight=10.0):
         super().__init__()
         self.lr = lr
         self.weight_decay = weight_decay
         self.keypoint_config = keypoint_config
+        self.depth_weight = depth_weight
         self._load_model(features, dropout)
-        self.loss = KeypointLoss(keypoint_config['keypoint_config'], center_weight=center_weight)
+        self.loss = KeypointLoss(keypoint_config['keypoint_config'], depth_weight=self.depth_weight, center_weight=center_weight)
         self.save_hyperparameters()
 
     def _load_model(self, features, dropout):
@@ -159,12 +161,14 @@ def main():
                 center_weight=flags.center_weight,
                 features=flags.features,
                 dropout=flags.dropout,
+                depth_weight=flags.depth_weight,
                 weight_decay=flags.weight_decay)
     else:
         module = KeypointModule.load_from_checkpoint(flags.resume,
                 lr=flags.lr,
                 center_weight=flags.center_weight,
                 dropout=flags.dropout,
+                depth_weight=flags.depth_weight,
                 weight_decay=flags.weight_decay)
 
     from pytorch_lightning.callbacks import ModelCheckpoint
