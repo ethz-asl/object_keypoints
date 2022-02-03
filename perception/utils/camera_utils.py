@@ -136,6 +136,18 @@ def from_calibration(calibration_file):
         else:
             raise ValueError(f"Unrecognized calibration type {camera['distortion_model']}.")
 
+def from_msg(camera_info):
+    K = np.reshape(np.asarray(camera_info.K), (3, 3))
+    D = np.asarray(camera_info.D)
+    camera_resolution = [camera_info.width, camera_info.height]
+    if camera_info.distortion_model == "equidistant":
+        return FisheyeCamera(K, D, camera_resolution[::-1])
+    elif camera_info.distortion_model in ["radtan", "plumb_bob"]:
+        return RadTanPinholeCamera(K, D, camera_resolution[::-1])
+    else:
+        raise ValueError(f"Unrecognized calibration type {camera_info.distortion_model}")
+        
+
 def load_calibration_params(calibration_file):
     with open(calibration_file, 'rt') as f:
         calibration = yaml.load(f.read(), Loader=yaml.SafeLoader)
