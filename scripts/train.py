@@ -122,15 +122,29 @@ class DataModule(pl.LightningDataModule):
     def __init__(self, flags, keypoint_config):
         super().__init__()
         self.keypoint_config = keypoint_config
-        datasets = []
-        train_directories = os.listdir(flags.train)
-        train_sequences = sorted([os.path.join(flags.train, d) for d in train_directories])
-        val_directories = os.listdir(flags.val)
-        val_sequences = sorted([os.path.join(flags.val, d) for d in val_directories])
+        
+        train_sequences = []
+        train_sets = os.listdir(flags.train)
+        for set in train_sets:
+            set_sequences = os.path.join(flags.train, set)
+            train_sequences = train_sequences + sorted([os.path.join(set_sequences, d) for d in os.listdir(set_sequences)])
+        # train_directories = os.listdir(flags.train)
+        # train_sequences = sorted([os.path.join(flags.train, d) for d in train_directories])
+        val_sequences = []
+        val_sets = os.listdir(flags.val)
+        for set in val_sets:
+            set_sequences = os.path.join(flags.val, set)
+            val_sequences = val_sequences + sorted([os.path.join(set_sequences, d) for d in os.listdir(set_sequences)])
+            
+        # val_directories = os.listdir(flags.val)
+        # val_sequences = sorted([os.path.join(flags.val, d) for d in val_directories])   
         self.flags = flags
         self.train_sequences = train_sequences
         self.val_sequences = val_sequences
-
+        
+        print(" # train set: " , len(self.train_sequences))
+        print(" # val set: " , len(self.val_sequences))
+        
     def setup(self, stage):
         if stage == 'fit':
             train_datasets = []
