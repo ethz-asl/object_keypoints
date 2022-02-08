@@ -17,7 +17,7 @@ class InferenceComponent:
     def __init__(self, model, cuda):
         self.cuda = cuda
         if cuda:
-            self.model = torch.jit.load(model, map_location='gpu') #model.cuda()
+            self.model = torch.jit.load(model, map_location='cuda') #model.cuda()
         else:
             self.model = torch.jit.load(model, map_location='cpu').float() #model.cpu().float()
 
