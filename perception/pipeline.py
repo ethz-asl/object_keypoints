@@ -185,7 +185,8 @@ class ObjectKeypointPipeline:
         heatmap = heatmap.numpy()
         p_centers = p_centers[0].numpy()
         p_depth = p_depth[0].numpy()
-        points, confidence = self.keypoint_extraction(heatmap)        
+        points, confidence = self.keypoint_extraction(heatmap)
+        print(f"[ObjectKeypointPipeline]: Heatmap returned points {points} with confidence {confidence}")
         detected_objects = self.object_extraction(points[0], confidence[0], p_centers)
 
         objects = []
