@@ -409,5 +409,5 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     imageViewer = QImageViewer(flags)
     imageViewer.showMaximized()
-    QTimer.singleShot(1, imageViewer.zoomImages)
+    QTimer.singleShot(100, imageViewer.zoomImages)
     sys.exit(app.exec_())
