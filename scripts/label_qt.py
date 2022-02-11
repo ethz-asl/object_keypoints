@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 from perception.utils import camera_utils, linalg
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImage, QPixmap, QPalette, QPainter
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import QWidget, QLabel, QSizePolicy, QScrollArea, QMessageBox, QMainWindow, QMenu, QAction, \
@@ -126,7 +126,7 @@ class QImageViewer(QMainWindow):
 
         self._createActions()
         self._createMenus()
-        
+
         self.setWindowTitle("Image Labeler Plus")
         self.resize(800, 600)
 
@@ -408,5 +408,6 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
     imageViewer = QImageViewer(flags)
-    imageViewer.show()
+    imageViewer.showMaximized()
+    QTimer.singleShot(1, imageViewer.zoomImages)
     sys.exit(app.exec_())
