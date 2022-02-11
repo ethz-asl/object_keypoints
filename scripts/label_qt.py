@@ -95,7 +95,7 @@ class QImageViewer(QMainWindow):
 
             button = QPushButton('Random Image', self)
             button.setToolTip('Move to a random frame')
-            button.clicked.connect(lambda: self.nextImage(image))
+            button.clicked.connect(lambda: self.nextImage(image, True))
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
             image = QCustomImage(scrollArea=scrollArea, button=button)
