@@ -175,7 +175,7 @@ class DetectionToPoint:
             # TODO Bug in the depth access, sometimes xy_int accesses
             # for example 67 even though p_depth is (64, 64)
             # This is a quick fix
-            zs = p_depth[np.min(xy_int[:, 1], p_depth.shape[0]), np.min(xy_int[:, 1], p_depth.shape[1])]
+            zs = np.array([0])
 
         return self.camera.unproject(xy, zs)
 
