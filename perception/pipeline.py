@@ -70,11 +70,11 @@ class KeypointExtractionComponent:
         for i, n_keypoints in enumerate(self.keypoint_config):
             probabilities = torch.tensor(heatmap[i].astype(np.float32))[None, None]
             weights_c = torch.nn.functional.conv2d(probabilities, self.kernel, bias=None, stride=1,
-                    padding=2)
-            surpressed = nms(weights_c)  
+                                                   padding=2)
+            surpressed = nms(weights_c)
             indices = self.image_indices[surpressed[0, 0] > self.PROBABILITY_CUTOFF]
             points, confidence = self._compute_points(indices, probabilities[0, 0])
-          
+
             points = [x[::-1] for x in points]
             out_points.append(points)
             confidences.append(confidence)
@@ -168,7 +168,15 @@ class DetectionToPoint:
         xy = self.camera.undistort(xy)
         xy_int = xy.round().astype(np.int)
         xy_int = np.clip(xy_int, self.min_index, self.max_index)
-        zs = p_depth[xy_int[:, 1], xy_int[:, 0]]
+
+        try:
+            zs = p_depth[xy_int[:, 1], xy_int[:, 0]]
+        except:
+            # TODO Bug in the depth access, sometimes xy_int accesses
+            # for example 67 even though p_depth is (64, 64)
+            # This is a quick fix
+            zs = p_depth[np.min(xy_int[:, 1], p_depth.shape[0]), np.min(xy_int[:, 1], p_depth.shape[1])]
+
         return self.camera.unproject(xy, zs)
 
 class ObjectKeypointPipeline:
@@ -197,7 +205,7 @@ class ObjectKeypointPipeline:
                 world_points.append(point)
             new_object = {'p_centers': obj['p_centers'],
                           'keypoints': [obj['center'][None]] + obj['heatmap_points'],
-                          'p_C': world_points}   
+                          'p_C': world_points}
             objects.append(new_object)
         return objects
 
@@ -209,4 +217,3 @@ class LearnedKeypointTrackingPipeline(ObjectKeypointPipeline):
     def __call__(self, frame):
         heatmap, depth, centers = self.inference(frame)
         return super().__call__(heatmap, depth, centers), heatmap
-
