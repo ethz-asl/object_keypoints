@@ -47,6 +47,11 @@ Once you have obtained the hand-eye calibration, configure your robot descriptio
 
 ### Collecting data
 
+To collect the data, run `scripts/record_keypoints_bag.sh <path-to-output-dir>`.
+Check in the file that only topics you want get recorded, but the default settings should be fine as well.
+
+#### Deprecated approach
+
 The script `scripts/collect_bags.py` is a helper program to assist in collecting data. It will use [rosbag](http://wiki.ros.org/rosbag) to record the camera topics and and transform messages.
 
 Run it with `python3 scripts/collect_bags.py --out <path-to-bag-output-folder>`.
