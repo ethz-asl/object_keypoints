@@ -2,9 +2,9 @@
 
 This repository contains a toolkit for collecting, labeling and tracking object keypoints. Object keypoints are semantic points in an object's coordinate frame.
 
-The project allows collecting images from multiple viewpoints using a robot with a wrist mounted camera. These image sequences can then be labeled using an easy to use user interface, StereoLabel.
+The project allows collecting images from multiple viewpoints using a robot with a wrist mounted camera. These image sequences can then be labeled using an easy to use user interface, *Image Labeler Plus*.
 
-![StereoLabel keypoint labeling](assets/images/stereolabel.jpg)
+![Image Labeler Plus keypoint labeling](assets/images/image-labeler-plus.png)
 
 Once the images are labeled, a model can be learned to detect keypoints in the images and compute 3D keypoints in the camera's coordinate frame.
 
@@ -37,7 +37,13 @@ Here we describe the process we used to arrive at our labeled datasets and learn
 
 ### Calibration and setup
 
-First, calibrate your camera and obtain a hand-eye-calibration. Calibrating the camera can be done using [Kalibr](https://github.com/ethz-asl/kalibr). Hand-eye-calibration can be done with the [ethz-asl/hand_eye_calibration](https://github.com/ethz-asl/hand_eye_calibration) or [easy_handeye](https://github.com/IFL-CAMP/easy_handeye) packages.
+First, calibrate your camera and obtain a hand-eye-calibration. Calibrating the camera can be done using [camera_calibration](http://wiki.ros.org/camera_calibration) (more details in [moma_sensor_tools](https://github.com/ethz-asl/moma/tree/projects/piloting/moma_sensor_tools)).
+Hand-eye-calibration can be done with the [easy_handeye](https://github.com/IFL-CAMP/easy_handeye) package.
+
+#### Deprecated tools
+
+Intrinsic calibration can be done with  [Kalibr](https://github.com/ethz-asl/kalibr) is no longer maintained here.
+Extrinsic hand-eye calibration can be done with the package [ethz-asl/hand_eye_calibration](https://github.com/ethz-asl/hand_eye_calibration).
 
 The software currently assumes that the Kalibr `pinhole-equi` camera model was used when calibrating the camera.
 
@@ -47,7 +53,7 @@ Once you have obtained the hand-eye calibration, configure your robot descriptio
 
 ### Collecting data
 
-To collect the data, run `scripts/record_keypoints_bag.sh <path-to-output-dir> <recording-name> <mode=default>` in the `moma_sensor_tools` package.
+To collect the data, run `scripts/record_keypoints_bag.sh <path-to-output-dir> <recording-name> <mode=default>` in the moma_sensor_tools package (see above).
 Check in the file that only topics you want get recorded, but the default settings should be fine as well.
 
 #### Deprecated approach
@@ -62,11 +68,11 @@ Press enter to start recording a new sequence. Recording will start after a 5 se
 
 Since rosbag is not a very convenient or efficient format for our purposes, we encode the data into a format that is easier to work with and uses up less disk space. This is done using the script `scripts/encode_bag.py`.
 
-Run it with `python3 scripts/encode_bags.py --bags <path-to-bag-output-folder> --out <path-to-dataset-output> --calibration <path-to-kalibr-calibration.yaml>`.
+Run it with `python3 scripts/encode_bags.py --bags <path-to-bag-output-folder> --out <path-to-dataset-output> --topics <image_topics_of_camera> --frames <corresponding_optical_image_frames>`.
 
 ### Labeling data
 
-![Valve](assets/images/valve.jpg)
+![Valve](assets/images/valve.png)
 
 First decide how many keypoints you will use for your object class and what their configuration is. Write a keypoint configuration file, like `config/valve.json` and `config/cups.json`. For example, in the case of our valve above, we define four different keypoints, which are of two types. The first type is the center keypoint type and the second is the spoke keypoint type. For our valve, there are three spokes, so we write our keypoint configuration as:
 ```
@@ -74,11 +80,16 @@ First decide how many keypoints you will use for your object class and what thei
 ```
 What this means, is that there will first be a keypoint of the first type and then three keypoints of the next type. Save this file for later.
 
-StereoLabel can be launched with `python3 scripts/label.py <path-to-dataset-folder>`. To label keypoints, click on the keypoints in the same order in each image. Make sure to label the points consistent with the keypoint configuration that you defined, so that the keypoints end up on the right heatmaps downstream.
+- *Image Labeler Plus* can be launched using `python3 scripts/label_qt.py <path-to-dataset-folder>`. In contrast to *StereoLabel*, the tool can be run without a GPU requirement. 
+- *StereoLabel* can be launched with `python3 scripts/label.py <path-to-dataset-folder>`.
+
+To label keypoints, click on the keypoints in the same order in each image. Make sure to label the points consistent with the keypoint configuration that you defined, so that the keypoints end up on the right heatmaps downstream.
 
 If you have multiple objects in the scene, it is important that you annotate one object at the time, sticking to the keypoint order, as the tool makes the assumption that one object's keypoints follow each other. The amount of keypoints you label should equal the amount of objects times the total number of keypoints per object.
 
 Once you have labeled an equal number of points on the left and right image, points will be backprojected, so that you can make sure that everything is correctly configured and that you didn't accidentally label the points in the wrong order. The points are saved at the same time to a file `keypoints.json` in each scene's directory.
+
+#### StereoLabel usage guide
 
 Here are some keyboard actions the tool supports:
 - Press `a` to change the left frame with a random frame from the current sequence.

@@ -134,9 +134,10 @@ class QImageViewer(QMainWindow):
         self.worldPoints = []
         self.alpha = 1.0
         self.hdf = h5py.File(os.path.join(flags.base_dir, 'data.hdf5'), 'r')
+        self.calibration = os.path.join(flags.base_dir, 'calibration.yaml')
         self.out_file = os.path.join(flags.base_dir, 'keypoints.json')
         self.done = False
-        self.camera = camera_utils.from_calibration(flags.calibration)
+        self.camera = camera_utils.from_calibration(self.calibration)
         print(self.hdf['camera_transform'].shape[0], "poses")
 
         self._video = video_io.vread(os.path.join(flags.base_dir, 'frames_preview.mp4'))
@@ -402,8 +403,6 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', help="Which directory to encoded video directories in.")
-    parser.add_argument('--calibration', type=str, default='config/calibration.yaml',
-                        help="Path to calibration file.")
     flags = parser.parse_args()
 
     app = QApplication(sys.argv)
