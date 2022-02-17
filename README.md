@@ -47,7 +47,7 @@ Once you have obtained the hand-eye calibration, configure your robot descriptio
 
 ### Collecting data
 
-To collect the data, run `scripts/record_keypoints_bag.sh <path-to-output-dir>`.
+To collect the data, run `scripts/record_keypoints_bag.sh <path-to-output-dir> <recording-name> <mode=default>` in the `moma_sensor_tools` package.
 Check in the file that only topics you want get recorded, but the default settings should be fine as well.
 
 #### Deprecated approach
