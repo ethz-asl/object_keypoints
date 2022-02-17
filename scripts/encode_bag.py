@@ -1,8 +1,8 @@
 import os
-import copy
 import rospy
 import shutil
 import rosbag
+import yaml
 import subprocess
 import numpy as np
 import tf2_py as tf2
@@ -23,6 +23,7 @@ def read_args():
     parser.add_argument('--until', default=None, type=int, help="Encode until the nth bag.")
     parser.add_argument('--topics', nargs="+", required=True, help="Which topics to encode into the stream.")
     parser.add_argument('--frames', nargs='+', required=True, help="The coordinate frames corresponding to the optical frames of each camera topic given to the --topics argument.")
+    parser.add_argument('--calibration-topic', default="/camera_info", help="The camera_info topic containing the camera calibration.")
     parser.add_argument('--base-frame', default='panda_link0', help="The name of the base tf frame.")
     return parser.parse_args()
 
@@ -70,7 +71,25 @@ class Runner:
                 self._bags.append(path)
         self._bags.sort()
 
-    def _read_poses(self, out_folder, bag):
+    def _read_calibration(self, bag):
+        if (self.flags.calibration_topic):
+            print("No calibration topic provided, ignoring")
+            return
+
+        print("Reading calibration")
+        for topic, camera_info, t in bag.read_messages(topics=self.flags.calibration_topic):
+            return {
+                'cam0': {
+                    'cam_overlaps': [1],
+                    'camera_model': 'pinhole' if camera_info.distortion_model == 'plumb_bob' else 'unknown',
+                    'distortion_coeffs': camera_info.D,
+                    'distortion_model': 'radtan' if camera_info.distortion_model == 'plumb_bob' else camera_info.distortion_model,
+                    'intrinsics': [camera_info.K[0], camera_info.K[4], camera_info.K[2], camera_info.K[5]],
+                    'resolution': [camera_info.width, camera_info.height]
+                }
+            }
+
+    def _read_poses(self, bag):
         print("Reading poses")
         tf_tree = tf2.BufferCore(rospy.Duration(360000.0))
         for topic, message, t in bag.read_messages(topics=["/tf", "/tf_static"]):
@@ -140,10 +159,16 @@ class Runner:
             with rosbag.Bag(path, 'r') as bag:
                 bag_name = os.path.basename(path)
                 out_folder = self._create_out_folder(bag_name)
-                filename = os.path.join(out_folder, 'data.hdf5')
 
-                with h5py.File(filename, 'w') as h5_file:
-                    tf_tree = self._read_poses(out_folder, bag)
+                calibration = self._read_calibration(bag)
+                if calibration:
+                    calibration_filename = os.path.join(out_folder, 'calibration.yaml')
+                    with open(calibration_filename, 'w') as calibration_file:
+                        yaml.dump(calibration, calibration_file, default_flow_style=False)
+
+                h5_filename = os.path.join(out_folder, 'data.hdf5')
+                with h5py.File(h5_filename, 'w') as h5_file:
+                    tf_tree = self._read_poses(bag)
                     image_frames = self._gather_images(bag)
                     poses = self._gather_poses(tf_tree, image_frames)
                     self._write_poses(h5_file, poses)
