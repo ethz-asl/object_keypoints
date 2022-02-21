@@ -60,8 +60,7 @@ class Sequence:
 
     def _load_calibration(self):
         calibration_file = os.path.join(self.sequence_path, 'calibration.yaml')
-        params = camera_utils.load_calibration_params(calibration_file)
-        camera = camera_utils.FisheyeCamera(params['K'], params['D'], params['image_size'])
+        camera = camera_utils.from_calibration(calibration_file)
         camera = camera.scale(SceneDataset.height_resized / SceneDataset.height)
         self.camera = camera.cut(self.image_offset)
 
@@ -276,7 +275,7 @@ class Runner:
             self.pipeline = ObjectKeypointPipeline(sequence.prediction_size, sequence.keypoints, sequence.keypoint_config)
         else:
             self.pipeline = LearnedKeypointTrackingPipeline(self.flags.model, not self.flags.cpu and torch.cuda.is_available(),
-                    sequence.prediction_size, sequence.keypoints, sequence.keypoint_config)
+                    sequence.prediction_size, sequence.keypoint_config)
         self.pipeline.reset(sequence.camera_small)
         self.results.set_calibration(sequence.camera_small)
 

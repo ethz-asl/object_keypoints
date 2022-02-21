@@ -4,7 +4,6 @@ import torch
 import numpy as np
 import json
 import random
-from matplotlib import pyplot as plt
 from albumentations.augmentations import transforms
 from perception.models import nms
 import albumentations as A
