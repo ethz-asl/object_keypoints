@@ -254,10 +254,7 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
             for i, points_in_map in enumerate(self.keypoint_config):
                 for _ in range(points_in_map):
                     p_C = points_3d[object_index, keypoint_index]
-                    current_keypoint = keypoints[object_index, keypoint_index]
-                    distance_to_keypoint = np.linalg.norm(current_keypoint[:, None, None] - self.target_pixel_indices, axis=0)
-                    within_range = distance_to_keypoint < center_radius
-                    depth_map[i][within_range] = p_C[2]
+                    depth_map[i] = p_C[2]
                     keypoint_index += 1
 
         return depth_map

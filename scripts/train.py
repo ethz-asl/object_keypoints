@@ -9,7 +9,7 @@ from albumentations.augmentations import transforms
 from perception.models import nms
 import albumentations as A
 from torch.utils.data import DataLoader
-from perception.loss import KeypointLoss
+from perception.loss import IntegralRegression
 from perception.datasets.video import SceneDataset
 from perception.models import KeypointNet
 import pytorch_lightning as pl
@@ -26,7 +26,6 @@ def read_args():
     parser.add_argument('--batch-size', default=8, type=int)
     parser.add_argument('--weight-decay', default=0.01, type=float)
     parser.add_argument('--features', default=128, type=int, help="Intermediate features in network.")
-    parser.add_argument('--center-weight', default=1.0, help="Weight for center loss vs. heatmap loss.")
     parser.add_argument('--lr', default=4e-3, type=float, help="Learning rate.")
     parser.add_argument('--dropout', default=0.1, type=float)
     parser.add_argument('--resume', default=None)
@@ -43,13 +42,13 @@ def _init_worker(worker_id):
     np.random.seed(worker_id)
 
 class KeypointModule(pl.LightningModule):
-    def __init__(self, keypoint_config, lr=3e-4, features=128, dropout=0.1, weight_decay=0.01, center_weight=10.0):
+    def __init__(self, keypoint_config, lr=3e-4, features=128, dropout=0.1, weight_decay=0.01):
         super().__init__()
         self.lr = lr
         self.weight_decay = weight_decay
         self.keypoint_config = keypoint_config
         self._load_model(features, dropout)
-        self.loss = KeypointLoss(keypoint_config['keypoint_config'], center_weight=center_weight)
+        self.loss = IntegralRegression(keypoint_config['keypoint_config'])
         self.save_hyperparameters()
 
     def _load_model(self, features, dropout):
@@ -62,15 +61,28 @@ class KeypointModule(pl.LightningModule):
         frame, target, depth, gt_centers = batch
         heatmaps, p_depth, p_centers = self(frame)
 
-        loss, heatmap_losses, depth_losses, center_losses = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
+        loss = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
 
+        if self.global_step % 10 == 0:
+            from matplotlib import pyplot as plt
+            from perception.models import spatial_softmax
+            from perception.datasets.video import SceneDataset
+            softmaxed = spatial_softmax(heatmaps[-1])
+            heatmap = softmaxed[0].sum(dim=0)
+            rgb = frame[0].numpy()
+
+            figure, axis = plt.subplots(nrows=2, ncols=2)
+
+            axis[0, 0].imshow(SceneDataset.to_image(rgb))
+            axis[0, 1].imshow(heatmap.detach().numpy())
+            axis[1, 0].imshow(SceneDataset.to_image(rgb))
+            axis[1, 1].imshow(target[0].sum(dim=0))
+
+            x, y, z = self.model.to_xyz(heatmaps[-1], p_depth[-1])
+            axis[0, 0].scatter(x.detach().numpy()[:, 0, 0] * (640.0 / 64.0),
+                    y.detach().numpy()[:, 0, 0] * (480.0 / 64.0))
+            plt.show()
         self.log('train_loss', loss)
-        self.log('heatmap_loss1', heatmap_losses[0])
-        self.log('heatmap_loss2', heatmap_losses[1])
-        self.log('depth_loss1', depth_losses[0])
-        self.log('depth_loss2', depth_losses[1])
-        self.log('center_loss1', center_losses[0])
-        self.log('center_loss2', center_losses[1])
 
         return loss
 
@@ -78,17 +90,9 @@ class KeypointModule(pl.LightningModule):
         frame, target, depth, gt_centers, _, keypoints = batch
         heatmaps, p_depth, p_centers = self(frame)
 
-        loss = self._validation_loss(heatmaps, target, keypoints)
-        val_loss, heatmap_losses, depth_losses, center_losses = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
+        loss = self.loss(heatmaps, target, p_depth, depth, p_centers, gt_centers)
 
         self.log('val_loss', loss)
-        self.log('total_heatmap_loss', val_loss)
-        self.log('val_heatmap_loss1', heatmap_losses[0])
-        self.log('val_heatmap_loss2', heatmap_losses[1])
-        self.log('val_depth_loss1', depth_losses[0])
-        self.log('val_depth_loss2', depth_losses[1])
-        self.log('val_center_loss1', center_losses[0])
-        self.log('val_center_loss2', center_losses[1])
 
         return loss
 
@@ -156,14 +160,12 @@ def main():
     if flags.resume is None:
         module = KeypointModule(keypoint_config,
                 lr=flags.lr,
-                center_weight=flags.center_weight,
                 features=flags.features,
                 dropout=flags.dropout,
                 weight_decay=flags.weight_decay)
     else:
         module = KeypointModule.load_from_checkpoint(flags.resume,
                 lr=flags.lr,
-                center_weight=flags.center_weight,
                 dropout=flags.dropout,
                 weight_decay=flags.weight_decay)
 

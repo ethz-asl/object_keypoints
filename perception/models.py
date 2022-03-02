@@ -105,5 +105,4 @@ class KeypointNet(nn.Module):
         y = y * torch.arange(H, device=y.device)[None, None]
         x = x.sum(dim=2, keepdim=True)
         y = y.sum(dim=2, keepdim=True)
-        xyz = torch.cat([x, y, depth_prediction], dim=2)
-        return xyz
+        return x, y, depth_prediction
