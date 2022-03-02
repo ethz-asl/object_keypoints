@@ -7,7 +7,15 @@ from perception.corner_net_lite.core.models.py_utils.utils import convolution
 from perception.corner_net_lite.core.base import load_nnet, load_cfg
 from perception.corner_net_lite.core.config import SystemConfig
 from perception.corner_net_lite.core.nnet.py_factory import NetworkFactory
-import timm
+
+
+def spatial_softmax(heatmaps):
+    """
+    heatmaps: N x K x H x W unnormalized heatmaps.
+    """
+    N, K, H, W = heatmaps.shape
+    out = F.softmax(heatmaps.reshape(N, K, H * W), dim=2)
+    return out.reshape(N, K, H, W)
 
 
 def prediction_module(int_features, features_out):
@@ -35,8 +43,8 @@ class DepthHead(nn.Module):
         self.output_head2 = prediction_module(features, heatmaps)
 
     def forward(self, x):
-        out1 = self.output_head1(x[0])
-        out2 = self.output_head2(x[1])
+        out1 = F.relu(self.output_head1(x[0]))
+        out2 = F.relu(self.output_head2(x[1]))
         return out1, out2
 
 class CenterHead(nn.Module):
@@ -84,3 +92,18 @@ class KeypointNet(nn.Module):
         centers_out = self.center_head(features)
         return heatmaps_out, depth_out, centers_out
 
+    def to_xyz(self, heatmaps, depth):
+        N, K, H, W = heatmaps.shape
+        heatmaps = spatial_softmax(heatmaps)
+        depth_prediction = heatmaps * depth
+        depth_prediction = depth_prediction.reshape(N, K, -1).sum(dim=2, keepdim=True)
+
+        x = heatmaps.sum(dim=2)
+        y = heatmaps.sum(dim=3)
+
+        x = x * torch.arange(W, device=x.device)[None, None]
+        y = y * torch.arange(H, device=y.device)[None, None]
+        x = x.sum(dim=2, keepdim=True)
+        y = y.sum(dim=2, keepdim=True)
+        xyz = torch.cat([x, y, depth_prediction], dim=2)
+        return xyz

@@ -207,8 +207,8 @@ Wrong number of total keypoints {world_points.shape[0]} n_keypoints: {self.n_key
         centers = self._compute_centers(keypoints)
         depth = self._compute_depth(keypoints, linalg.transform_points(T_CW, self.world_points))
 
-        heatmap_max = np.maximum(target.max(axis=2).max(axis=1), 0.5)
-        target = np.clip(target / heatmap_max[:, None, None], 0.0, 1.0)
+        # Normalize such that heatmap sums to one.
+        target = target / target.sum(axis=2).sum(axis=1)[:, None, None]
         target = torch.tensor(target)
         centers = torch.tensor(centers)
 

@@ -1,6 +1,7 @@
 import torch
 from torch.nn.modules.loss import _Loss
 from torch.nn import functional as F
+from perception.models import spatial_softmax
 
 class KeypointLoss(_Loss):
     def __init__(self, keypoint_config, depth_weight=10.0, center_weight=1.0, size_average=None, reduce=None, reduction='mean'):
@@ -81,8 +82,9 @@ class IntegralRegression(_Loss):
         center_loss = 0.0
         N = float(gt_heatmaps.shape[0])
         center_losses = []
-        coord_x, coord_y = self._heatmap_to_normalized_coordinates(p_heatmaps)
-        depth_prediction = self._depth_integration(p_heatmaps, p_depth)
+        p_heatmaps_softmax = spatial_softmax(p_heatmaps)
+        coord_x, coord_y = self._heatmap_to_normalized_coordinates(p_heatmaps_softmax)
+        depth_prediction = self._depth_integration(p_heatmaps_softmax, p_depth)
         xyz = torch.cat([coord_x, coord_y, depth_prediction], dim=2)
 
         x_gt, y_gt = self._heatmap_to_normalized_coordinates(gt_heatmaps)
